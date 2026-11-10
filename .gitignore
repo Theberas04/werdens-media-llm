@@ -1,0 +1,19 @@
+# modellen en engine-binaries horen niet in git
+models/
+*.gguf
+engine/llama-*/
+engine/*.tar.gz
+
+# gegevens en logs
+data/
+logs/
+*.log
+*.db
+
+# python
+__pycache__/
+*.pyc
+
+# omgeving
+.env
+config.env
