@@ -58,8 +58,10 @@ bash deploy/proxmox/provision-werdens-media-llm.sh <CTID>
 bash deploy/proxmox/check-werdens-media-llm.sh <CTID>
 ```
 
-Instellingen gaan via env-variabelen: `CORES`, `MEMORY`, `DISK`, `STATIC_IP`,
-`GATEWAY`, `CT_HOSTNAME`, `WMLM_MODEL`, `WMLM_EMBED_MODEL`.
+Instellingen gaan via env-variabelen vóór het commando: `CORES`, `MEMORY`, `DISK`,
+`STATIC_IP`, `GATEWAY`, `CT_HOSTNAME`. Het inrichtscript kiest het chatmodel zelf
+met de gemeten cijfers; wil je een eigen keuze, zet dan `WMLM_MODEL_REPO` en
+`WMLM_MODEL_FILE`, of `SKIP_MODELS=1` om het downloaden over te slaan.
 
 ## API
 
@@ -71,6 +73,24 @@ aanpassing werkt.
 
 **OpenAI-vorm** — `/v1/models`, `/v1/chat/completions`, `/v1/completions`,
 `/v1/embeddings`
+
+Daarbovenop twee eigen lagen, elk op hun eigen poort:
+
+**Werkruimtelaag (8090)** — documenten in een werkruimte met bronvermelding:
+
+- `GET|POST /api/workspaces`, `GET /api/workspaces/<slug>/documents`
+- `POST /api/workspaces/<slug>/documents` (plak tekst) en `.../documents/bestand` (haal een webpagina op)
+- `POST /api/workspaces/<slug>/query` — antwoord met bronnen
+- `POST /v1/chat/completions` met `model="werkruimte:<slug>"` — dezelfde vraag in OpenAI-vorm
+- `POST /api/workspaces/<slug>/sleutels` — API-sleutel voor je eigen apps
+
+**Medialaag (8091)** — spraak, en beeld zodra ComfyUI is aangesloten:
+
+- `POST /v1/audio/transcriptions` — spraakbericht naar tekst (multipart of rauw bestand)
+- `POST /v1/audio/speech` — tekst naar spraak, Nederlandse stem
+- `GET /v1/voices`, `GET /health`
+- `POST /v1/images/generations` — beeld (vraagt `WMLM_COMFY_URL`)
+- `GET /` — webpagina met microfoonopname en voorleesknop
 
 ```bash
 # chat, Ollama-vorm met streaming
@@ -85,6 +105,12 @@ curl http://192.168.1.100:11434/v1/chat/completions -d '{
   "model": "Llama-3.2-3B-Instruct-Q4_K_M",
   "messages": [{"role": "user", "content": "Hallo"}]
 }'
+
+# spraak uit, en datzelfde spraakbericht weer terug naar tekst
+curl -s http://192.168.1.100:8091/v1/audio/speech \
+  -d '{"input":"Dit is de Werdens Media LLM."}' -o hallo.wav
+curl -s http://192.168.1.100:8091/v1/audio/transcriptions \
+  -F file=@hallo.wav | jq -r .text
 ```
 
 ## CLI
@@ -167,24 +193,47 @@ videogeheugen en is de KV-cache f16, waardoor dezelfde modellen wél passen.
 | `WLLM_KEEP_ALIVE` | `300` | seconden voordat een ongebruikt model wordt ontladen |
 | `WLLM_THREADS` | aantal CPU's | rekenkracht-threads |
 
+De werkruimtelaag (`workspace/config.env`) en de medialaag (`media/config.env`)
+hebben hun eigen bestand:
+
+| Variabele | Default | Betekenis |
+|---|---|---|
+| `WMLM_ENGINE_URL` | `http://127.0.0.1:11434` | waar de werkruimtelaag de engine vindt |
+| `WMLM_DATA` | `$WMLM_HOME/data` | de SQLite-database met documenten en vectoren |
+| `WMLM_CHAT_MODEL` / `WMLM_EMBED_MODEL` | gekozen bij installatie | welk model antwoordt en welk model vectoren maakt |
+| `WMLM_PORT` | `8090` | poort van de werkruimtelaag |
+| `WMLM_MEDIA_PORT` | `8091` | poort van de medialaag |
+| `WMLM_WHISPER_MODEL` | `ggml-small.bin` | groter is nauwkeuriger maar langzamer op CPU |
+| `WMLM_PIPER_STEM` | `nl_NL-mls-medium.onnx` | welke Nederlandse stem Piper gebruikt |
+| `WMLM_COMFY_URL` | leeg | ComfyUI-adres voor beeldgeneratie; zonder dit geeft die route een uitleg |
+
 ## Architectuur
 
 ```
-Hermes Agent  ·  je eigen apps  ·  embed-widget
-        │  Ollama-API (:11434/api/*)   of   OpenAI-API (:11434/v1/*)
-        ▼
-  engine/wllm.py  (pure Python, alleen stdlib)
-        ├── modellen     : gguf-bestanden, manifests, digest, pull en delete
-        ├── enginebeheer : één llama-server per model en context, warm houden, ontladen
-        └── vertaling    : Ollama- en OpenAI-verzoeken naar de engine
-        ▼
-  llama-server (llama.cpp)
+Hermes Agent · je eigen apps · spraakberichten · embed-widget
+        │                        │                      │
+        │ :11434                 │ :8090                │ :8091
+        ▼                        ▼                      ▼
+  engine/wllm.py        workspace/wmlm_workspace.py   media/wmlm_media.py
+  Ollama + OpenAI       werkruimtes, documenten        spraak naar tekst
+  modellen, pull,       met bronvermelding,            (whisper.cpp) en
+  warm houden           vectordatabase op SQLite       spraak uit (Piper)
+        │                        │                      │
+        ▼                        └──────────┬───────────┘
+  llama-server (llama.cpp)                  │
+        ▲───────────────────────────────────┘
+        (de werkruimte vraagt embeddings en antwoorden aan de engine)
 ```
+
+De lagen kunnen niet zonder de engine: die levert het rekenwerk. Alles blijft in
+je eigen netwerk en er gaat geen verzoek naar buiten.
 
 ## Status en roadmap
 
-Zie [docs/ROADMAP.md](docs/ROADMAP.md). Kort: de engine werkt en is getest op een
-CPU-only machine; de werkruimte- en medialaag volgen.
+Zie [docs/ROADMAP.md](docs/ROADMAP.md). Kort: de engine, de werkruimtelaag en de
+medialaag werken en zijn getest op een CPU-only machine (4 vCPU, 7,6 GB, geen
+GPU). De drie lagen draaien als aparte diensten. Beeldgeneratie en video staan
+nog open.
 
 ## Licentie
 
