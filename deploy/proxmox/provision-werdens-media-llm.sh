@@ -42,7 +42,10 @@ EMBED_REPO="${WMLM_EMBED_REPO:-nomic-ai/nomic-embed-text-v1.5-GGUF}"
 EMBED_FILE="${WMLM_EMBED_FILE:-nomic-embed-text-v1.5.Q8_0.gguf}"
 SKIP_MODELS="${SKIP_MODELS:-0}"
 WLLM_CTX="${WLLM_CTX:-65536}"
-WLLM_THREADS="${WLLM_THREADS:-$(nproc 2>/dev/null || echo 4)}"
+# 0 = automatisch: de engine kijkt dan zelf hoeveel cores er te gebruiken zijn.
+# Zo hoeft er niets aangepast te worden als de container later meer rekenkracht
+# krijgt; een herstart is genoeg.
+WLLM_THREADS="${WLLM_THREADS:-0}"
 POORT="${WLLM_PORT:-11434}"
 
 log(){ printf '\033[1;36m==>\033[0m %s\n' "$*"; }

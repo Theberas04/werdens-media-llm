@@ -221,7 +221,45 @@ def _kv_type() -> str:
 
 HOST = os.environ.get("WLLM_HOST", "0.0.0.0")
 PORT = int(os.environ.get("WLLM_PORT", "11434"))
-THREADS = int(os.environ.get("WLLM_THREADS", str(os.cpu_count() or 4)))
+
+
+def _fysieke_cores() -> int:
+    """Het aantal echte cores van de machine, niet de logische. llama.cpp wordt
+    langzamer als je er meer threads tegenaan gooit dan er echte cores zijn."""
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
+            inhoud = f.read()
+        paren = set()
+        for blok in inhoud.split("\n\n"):
+            fysiek = re.search(r"physical id\s*:\s*(\d+)", blok)
+            core = re.search(r"core id\s*:\s*(\d+)", blok)
+            if fysiek and core:
+                paren.add((fysiek.group(1), core.group(1)))
+        if paren:
+            return len(paren)
+    except OSError:
+        pass
+    return os.cpu_count() or 4
+
+
+def _beste_threads() -> int:
+    """Hoeveel rekenkracht-threads deze machine het beste kan gebruiken.
+
+    In een container beperkt de host het aantal cores (cpuset), en dat ziet
+    sched_getaffinity wél en /proc/cpuinfo niet. Daarom het minimum van wat de
+    container mag gebruiken en wat de machine echt aan cores heeft: op een host
+    met hyperthreading voorkomt dat 8 threads op 4 echte cores."""
+    try:
+        toegestaan = len(os.sched_getaffinity(0))
+    except AttributeError:
+        toegestaan = os.cpu_count() or 4
+    return max(1, min(toegestaan, _fysieke_cores()))
+
+
+# WLLM_THREADS=0 of leeg betekent: kijk zelf hoeveel er te gebruiken is. Dan pakt
+# de engine de extra cores als de container later meer krijgt (na een herstart).
+_gewenst = int(os.environ.get("WLLM_THREADS") or 0)
+THREADS = _gewenst if _gewenst > 0 else _beste_threads()
 # Hermes Agent weigert modellen onder de 64.000 tokens context, dus de default
 # moet daar op of boven zitten. 64k f16 KV-cache is ~2,15 GB; met q8_0 is dat
 # ~1,07 GB en dat past naast Hermes op 8 GB.

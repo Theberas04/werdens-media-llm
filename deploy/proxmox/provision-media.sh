@@ -64,10 +64,22 @@ binnen mkdir -p "$TARGET/media/bin" "$TARGET/media/models" "$TARGET/media/voices
 
 log "3/5 whisper.cpp ophalen (tag $WHISPER_TAG) en het model $WHISPER_MODEL_FILE"
 if ! binnen test -x "$TARGET/media/bin/whisper/whisper-cli"; then
+  # --strip-components=1: de tarball heeft een map om de bestanden heen
+  # (whisper-bin-ubuntu-x64/whisper-cli). Zonder die optie komt de binary één map
+  # te diep te staan en vindt de medialaag hem niet meer.
   binnen_bash "cd $TARGET/media/bin && curl -fsSL --retry 3 -o whisper.tar.gz \
     https://github.com/ggml-org/whisper.cpp/releases/download/$WHISPER_TAG/whisper-bin-ubuntu-$WHISPER_ARCH.tar.gz \
-    && mkdir -p whisper && tar xzf whisper.tar.gz -C whisper && rm -f whisper.tar.gz" \
+    && mkdir -p whisper && tar xzf whisper.tar.gz -C whisper --strip-components=1 && rm -f whisper.tar.gz" \
     || die "whisper.cpp downloaden mislukte. Bestaat tag $WHISPER_TAG nog? Zet WHISPER_TAG=... naar een bestaande build."
+  if ! binnen test -x "$TARGET/media/bin/whisper/whisper-cli"; then
+    # Nog een keer, nu zonder strippen: sommige builds hebben geen map eromheen.
+    binnen_bash "cd $TARGET/media/bin && curl -fsSL --retry 3 -o whisper.tar.gz \
+      https://github.com/ggml-org/whisper.cpp/releases/download/$WHISPER_TAG/whisper-bin-ubuntu-$WHISPER_ARCH.tar.gz \
+      && mkdir -p whisper && tar xzf whisper.tar.gz -C whisper && rm -f whisper.tar.gz" \
+      || true
+    binnen test -x "$TARGET/media/bin/whisper/whisper-cli" \
+      || die "whisper-cli staat niet in $TARGET/media/bin/whisper na uitpakken. Kijk zelf in de container: ls -R $TARGET/media/bin/whisper | head -20"
+  fi
 fi
 if ! binnen test -s "$TARGET/media/models/$WHISPER_MODEL_FILE"; then
   log "    spraakmodel: $WHISPER_MODEL_FILE (enkele honderden MB)"

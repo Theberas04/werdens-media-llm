@@ -152,6 +152,12 @@ def _kies_whisper() -> Path:
         for pad in kandidaten:
             if _uitvoerbaar(pad):
                 return pad
+        # Laatste redmiddel: zoek hem op, waar de uitgepakte map ook staat. Een
+        # tarball met een map eromheen (whisper-bin-ubuntu-x64/whisper-cli) of met
+        # nog een laag erin mag nooit betekenen dat spraak erin niet werkt.
+        for pad in sorted(BIN.rglob(naam)):
+            if _uitvoerbaar(pad):
+                return pad
     return BIN / "whisper-cli"
 
 
