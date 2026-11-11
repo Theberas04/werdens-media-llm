@@ -244,6 +244,15 @@ def _fysieke_cores() -> int:
     return os.cpu_count() or 4
 
 
+def _toegestane_cores() -> int:
+    """Hoeveel cores deze container mag gebruiken. De host kan dat beperken, en
+    dat ziet sched_getaffinity wel en /proc/cpuinfo niet."""
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:
+        return os.cpu_count() or 4
+
+
 def _beste_threads() -> int:
     """Hoeveel rekenkracht-threads deze machine het beste kan gebruiken.
 
@@ -251,11 +260,7 @@ def _beste_threads() -> int:
     sched_getaffinity wél en /proc/cpuinfo niet. Daarom het minimum van wat de
     container mag gebruiken en wat de machine echt aan cores heeft: op een host
     met hyperthreading voorkomt dat 8 threads op 4 echte cores."""
-    try:
-        toegestaan = len(os.sched_getaffinity(0))
-    except AttributeError:
-        toegestaan = os.cpu_count() or 4
-    return max(1, min(toegestaan, _fysieke_cores()))
+    return max(1, min(_toegestane_cores(), _fysieke_cores()))
 
 
 # WLLM_THREADS=0 of leeg betekent: kijk zelf hoeveel er te gebruiken is. Dan pakt
@@ -1129,7 +1134,9 @@ class Handler(BaseHTTPRequestHandler):
             f"<dt>Engine</dt><dd><code>{ENGINE}</code></dd>"
             f"<dt>Contextvenster</dt><dd>{CTX:,} tokens</dd>"
             f"<dt>KV-cache</dt><dd>{KV_TYPE}</dd>"
-            f"<dt>Rekenkracht</dt><dd>{THREADS} threads</dd>"
+            f"<dt>Rekenkracht</dt><dd>{THREADS} threads"
+            f" <small>({_toegestane_cores()} cores beschikbaar,"
+            f" {_fysieke_cores()} fysiek)</small></dd>"
             f"<dt>GPU</dt><dd>{gpu_tekst}</dd>"
             f"<dt>Aanbevolen model</dt><dd>{aanb_tekst}</dd>"
             "</dl></div></div>"
@@ -1226,6 +1233,10 @@ class Handler(BaseHTTPRequestHandler):
                     "context": CTX,
                     "kv_type": KV_TYPE,
                     "threads": THREADS,
+                    "cores": {
+                        "toegestaan": _toegestane_cores(),
+                        "fysiek": _fysieke_cores(),
+                    },
                     "aanbevolen_model": aanbevolen_model(),
                 }
             )
