@@ -137,6 +137,329 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--pane3);border:1px
 
 
 # --------------------------------------------------------------------------- #
+# Chatpagina: praten met de LLM in de browser
+# --------------------------------------------------------------------------- #
+# Let op (twee keer eerder misgegaan): dit is GEEN f-string, want de JS staat vol
+# accolades -- de huisstijl komt er via __HUISSTIJL__ in. En de JS is volledig
+# backslash-vrij geschreven: nieuwe regels via String.fromCharCode(10), regexes
+# met tekenklassen ([*], [^`], [(]) in plaats van \*, \` en \(.
+CHAT_PAGINA = """<!doctype html><html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Werdens Media LLM — chat</title>
+<style>
+__HUISSTIJL__
+/* Geen vaste hoogte met een berekend getal: op een telefoon is de kop twee keer zo
+   hoog, waardoor de invoerbalk en de voettekst buiten beeld vielen. De pagina is
+   nu een kolom over het hele scherm en alleen het gesprek scrolt. */
+html,body{height:100%}
+body{display:flex;flex-direction:column;overflow:hidden}
+header.kop{flex:none}
+main.chat{flex:1;min-height:0;padding:18px 26px 20px;display:flex;flex-direction:column;gap:12px;
+  max-width:920px}
+.gesprek{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
+.leeg{color:var(--muted2);font-size:14px;padding:6px 2px}
+.bubbel{max-width:min(720px,90%);border:1px solid var(--line);border-radius:var(--r);
+  padding:11px 14px;background:var(--pane);box-shadow:var(--schaduw)}
+.bubbel.van-mij{align-self:flex-end;background:var(--accent-soft);border-color:#cbe6fb}
+.wie{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted2);
+  font-weight:700;margin-bottom:5px}
+.bubbel .tekst{white-space:pre-wrap;overflow-wrap:break-word}
+.bubbel .tekst h3,.bubbel .tekst h4,.bubbel .tekst h5{margin:10px 0 4px;font-size:15px}
+.bubbel .tekst ul{margin:6px 0;padding-left:20px}
+.bubbel pre{background:var(--pane3);border:1px solid var(--line);border-radius:10px;
+  padding:10px;overflow-x:auto;margin:8px 0}
+.bubbel pre code{background:none;border:0;padding:0;font-size:12.5px}
+.wacht{color:var(--muted2)}
+.onder{display:flex;gap:10px;align-items:flex-end;border-top:1px solid var(--line);padding-top:12px}
+.onder textarea{min-height:44px;max-height:180px}
+.onder .knop{height:44px;flex:none}
+.voet{font-size:12px;color:var(--muted2);min-height:16px}
+/* Het hidden-attribuut van de browser verliest van de .knop-regel in de huisstijl
+   (die zet display:inline-flex), waardoor de stopknop zichtbaar bleef. */
+[hidden]{display:none !important}
+.kop-rechts select{width:auto;height:34px;font-size:13px;max-width:240px}
+@media(max-width:820px){
+  main.chat{padding:12px 14px 14px}
+  header.kop{flex-wrap:wrap;gap:8px}
+  .kop-rechts{margin-left:0;width:100%;flex-wrap:wrap}
+  .kop-rechts select{max-width:100%;flex:1}
+  .merk .sub{display:none}
+  .bubbel{max-width:100%}}
+</style></head><body>
+<header class="kop"><div class="merk">
+<span class="logo"><img src="/logo.png" alt="Werdens Media" onerror="this.style.display='none'"></span>
+<div><div class="naam">Werdens Media LLM</div>
+<div class="sub">Werdens Media &middot; chat</div></div></div>
+<div class="kop-rechts">
+<select id="model" title="Model"></select>
+<button class="knop" id="nieuw">Nieuw gesprek</button>
+<a class="knop" href="/">Status</a></div>
+</header>
+<main class="chat">
+<div class="gesprek" id="gesprek"></div>
+<div class="onder">
+<textarea id="invoer" rows="1" placeholder="Typ je vraag…" title="Enter stuurt, Shift+Enter geeft een nieuwe regel"></textarea>
+<button class="knop primair" id="stuur">Stuur</button>
+<button class="knop" id="stop" hidden>Stop</button>
+</div>
+<div class="voet" id="voet"></div>
+</main>
+<script>
+var GESPREK = [];
+var BEZIG = false;
+var STOP = null;
+
+function el(id){ return document.getElementById(id); }
+function nl(){ return String.fromCharCode(10); }
+function veilig(t){
+  return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function koppelingen(t){
+  var uit = "";
+  var i = 0;
+  while (i < t.length){
+    if (t.charAt(i) === "["){
+      var eind = t.indexOf("]", i);
+      var open = eind >= 0 ? t.indexOf("(", eind) : -1;
+      var sluit = open === eind + 1 ? t.indexOf(")", open) : -1;
+      if (eind > i && sluit > open){
+        var naam = t.slice(i + 1, eind);
+        var url = t.slice(open + 1, sluit);
+        if (url.indexOf("http") === 0){
+          uit += '<a href="' + url + '" target="_blank" rel="noopener">' + naam + "</a>";
+          i = sluit + 1;
+          continue;
+        }
+      }
+    }
+    uit += t.charAt(i);
+    i++;
+  }
+  return uit;
+}
+
+function opmaakKlein(t){
+  var s = t;
+  s = s.replace(new RegExp("[*][*]([^*]+)[*][*]", "g"), "<b>$1</b>");
+  s = s.replace(new RegExp("`([^`]+)`", "g"), "<code>$1</code>");
+  s = s.replace(new RegExp("[*]([^*]+)[*]", "g"), "<i>$1</i>");
+  var regels = s.split(nl());
+  var uit = "";
+  var inLijst = false;
+  for (var i = 0; i < regels.length; i++){
+    var r = regels[i];
+    var punt = r.match(new RegExp("^[-*] (.*)$"));
+    var kop = r.match(new RegExp("^(#{1,4}) (.*)$"));
+    if (punt){
+      if (!inLijst){ uit += "<ul>"; inLijst = true; }
+      uit += "<li>" + punt[1] + "</li>";
+      continue;
+    }
+    if (inLijst){ uit += "</ul>"; inLijst = false; }
+    if (kop){
+      var n = Math.min(kop[1].length + 2, 5);
+      uit += "<h" + n + ">" + kop[2] + "</h" + n + ">";
+    } else {
+      uit += r + nl();
+    }
+  }
+  if (inLijst){ uit += "</ul>"; }
+  return uit;
+}
+
+function opmaak(tekst){
+  var t = veilig(tekst);
+  var delen = t.split("```");
+  var uit = "";
+  for (var i = 0; i < delen.length; i++){
+    if (i % 2 === 1){
+      var stuk = delen[i].replace(new RegExp("^[a-zA-Z0-9+#-]*" + nl()), "");
+      uit += "<pre><code>" + stuk + "</code></pre>";
+    } else {
+      uit += opmaakKlein(koppelingen(delen[i]));
+    }
+  }
+  return uit;
+}
+
+function bewaar(){
+  try { localStorage.setItem("wmlm-gesprek", JSON.stringify(GESPREK)); } catch (e) {}
+}
+
+function herstel(){
+  try {
+    var d = JSON.parse(localStorage.getItem("wmlm-gesprek") || "[]");
+    if (Object.prototype.toString.call(d) === "[object Array]"){ GESPREK = d; }
+  } catch (e) { GESPREK = []; }
+}
+
+function tekenen(){
+  var bak = el("gesprek");
+  bak.innerHTML = "";
+  if (!GESPREK.length){
+    var leeg = document.createElement("div");
+    leeg.className = "leeg";
+    leeg.textContent = "Stel een vraag en de Werdens Media LLM antwoordt. Alles blijft op deze machine.";
+    bak.appendChild(leeg);
+  }
+  for (var i = 0; i < GESPREK.length; i++){
+    var m = GESPREK[i];
+    var d = document.createElement("div");
+    d.className = "bubbel " + (m.rol === "gebruiker" ? "van-mij" : "van-ai");
+    var wie = document.createElement("div");
+    wie.className = "wie";
+    wie.textContent = m.rol === "gebruiker" ? "jij" : "Werdens Media LLM";
+    var lijf = document.createElement("div");
+    lijf.className = "tekst";
+    if (m.rol === "gebruiker"){ lijf.textContent = m.tekst; }
+    else if (m.tekst){ lijf.innerHTML = opmaak(m.tekst); }
+    else { lijf.innerHTML = '<span class="wacht">aan het nadenken…</span>'; }
+    d.appendChild(wie);
+    d.appendChild(lijf);
+    bak.appendChild(d);
+  }
+  bak.scrollTop = bak.scrollHeight;
+}
+
+function groei(){
+  var v = el("invoer");
+  v.style.height = "auto";
+  v.style.height = Math.min(v.scrollHeight, 180) + "px";
+}
+
+function laadModellen(){
+  fetch("/api/tags").then(function(r){ return r.json(); }).then(function(d){
+    var sel = el("model");
+    var namen = [];
+    var lijst = d.models || [];
+    for (var i = 0; i < lijst.length; i++){
+      var n = lijst[i].name || lijst[i].model;
+      if (n && namen.indexOf(n) < 0){ namen.push(n); }
+    }
+    sel.innerHTML = "";
+    for (var j = 0; j < namen.length; j++){
+      var o = document.createElement("option");
+      o.value = namen[j];
+      o.textContent = namen[j];
+      sel.appendChild(o);
+    }
+    var bewaard = null;
+    try { bewaard = localStorage.getItem("wmlm-model"); } catch (e) {}
+    if (bewaard && namen.indexOf(bewaard) >= 0){ sel.value = bewaard; }
+    el("voet").textContent = namen.length ? "klaar om te chatten" : "nog geen model in huis";
+  }).catch(function(){
+    el("voet").textContent = "kon de modellen niet ophalen";
+  });
+}
+
+async function stuur(){
+  var vak = el("invoer");
+  var tekst = vak.value.trim();
+  if (!tekst || BEZIG){ return; }
+  vak.value = "";
+  groei();
+  GESPREK.push({ rol: "gebruiker", tekst: tekst });
+  var ai = { rol: "ai", tekst: "" };
+  GESPREK.push(ai);
+  tekenen();
+  bewaar();
+  BEZIG = true;
+  el("stuur").disabled = true;
+  el("stop").hidden = false;
+  var t0 = Date.now();
+  var tekens = 0;
+  STOP = new AbortController();
+  try {
+    var berichten = [];
+    for (var i = 0; i < GESPREK.length; i++){
+      var m = GESPREK[i];
+      if (m === ai){ break; }
+      if (m.tekst){
+        berichten.push({ role: m.rol === "gebruiker" ? "user" : "assistant", content: m.tekst });
+      }
+    }
+    var antw = await fetch("/v1/chat/completions", {
+      method: "POST",
+      signal: STOP.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: el("model").value, stream: true, messages: berichten })
+    });
+    if (!antw.ok){
+      var fout = "";
+      try { fout = await antw.text(); } catch (e) {}
+      throw new Error("de engine gaf " + antw.status + (fout ? ": " + fout.slice(0, 200) : ""));
+    }
+    var lezer = antw.body.getReader();
+    var kijken = new TextDecoder();
+    var rest = "";
+    while (true){
+      var stuk = await lezer.read();
+      if (stuk.done){ break; }
+      rest += kijken.decode(stuk.value, { stream: true });
+      var regels = rest.split(nl());
+      rest = regels.pop();
+      for (var j = 0; j < regels.length; j++){
+        var regel = regels[j].trim();
+        if (regel.indexOf("data:") !== 0){ continue; }
+        var data = regel.slice(5).trim();
+        if (!data || data === "[DONE]"){ continue; }
+        var brok = null;
+        try { brok = JSON.parse(data); } catch (e) { continue; }
+        var keuze = (brok.choices || [])[0] || {};
+        var delta = keuze.delta || {};
+        var deel = typeof delta.content === "string" ? delta.content : "";
+        if (deel){ ai.tekst += deel; tekens += deel.length; }
+      }
+      tekenen();
+    }
+  } catch (e) {
+    if (e.name === "AbortError"){
+      ai.tekst += (ai.tekst ? nl() + nl() : "") + "_(gestopt)_";
+    } else {
+      ai.tekst += (ai.tekst ? nl() + nl() : "") + "Er ging iets mis: " + e.message;
+    }
+  } finally {
+    BEZIG = false;
+    STOP = null;
+    el("stuur").disabled = false;
+    el("stop").hidden = true;
+    var sec = (Date.now() - t0) / 1000;
+    if (ai.tekst){
+      el("voet").textContent = "klaar · " + tekens + " tekens in " + sec.toFixed(1) +
+        " s · " + Math.round(tekens / Math.max(sec, 0.1)) + " tekens per seconde";
+    }
+    tekenen();
+    bewaar();
+    vak.focus();
+  }
+}
+
+el("stuur").addEventListener("click", stuur);
+el("stop").addEventListener("click", function(){ if (STOP){ STOP.abort(); } });
+el("nieuw").addEventListener("click", function(){
+  GESPREK = [];
+  bewaar();
+  tekenen();
+  el("voet").textContent = "";
+  el("invoer").focus();
+});
+el("model").addEventListener("change", function(){
+  try { localStorage.setItem("wmlm-model", el("model").value); } catch (e) {}
+});
+el("invoer").addEventListener("keydown", function(e){
+  if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); stuur(); }
+});
+el("invoer").addEventListener("input", groei);
+herstel();
+tekenen();
+laadModellen();
+el("invoer").focus();
+</script>
+</body></html>"""
+
+
+# --------------------------------------------------------------------------- #
 # Configuratie (env-vars met dezelfde geest als OLLAMA_*)
 # --------------------------------------------------------------------------- #
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -1131,7 +1454,9 @@ class Handler(BaseHTTPRequestHandler):
             "onerror=\"this.style.display='none'\"></span>"
             "<div><div class=\"naam\">Werdens Media LLM</div>"
             "<div class=\"sub\">Werdens Media · engine</div></div></div>"
-            f"<div class=\"kop-rechts\">poort {PORT} · Ollama- en OpenAI-API</div>"
+            f"<div class=\"kop-rechts\">"
+            "<a class=\"knop primair\" href=\"/chat\">Chatten</a>"
+            f"<span>poort {PORT} · Ollama- en OpenAI-API</span></div>"
             "</header><main>"
             "<div class=\"kaart\"><div class=\"kaart-kop\"><h2>Status</h2></div>"
             "<div class=\"kaart-body\"><dl>"
@@ -1198,6 +1523,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/logo.png":
             return self._png(logo_bytes())
+        if path in ("/chat", "/chat/"):
+            return self._html(CHAT_PAGINA.replace("__HUISSTIJL__", HUISSTIJL))
         if path in ("/api/version", "/version"):
             return self._json({"version": VERSION})
         if path == "/api/tags":
@@ -1692,9 +2019,15 @@ def cmd_serve(_a):
         print(f"  beste model: {advies['bestand']} ({advies['opmerking']})")
 
     def bye(*_s):
-        ENGINES.shutdown()
-        srv.shutdown()
-        sys.exit(0)
+        # Hier géén srv.shutdown(): dat wacht tot de serveer-lus stopt, en die
+        # loopt in dezélfde draad -- de afsluiting wacht dus op zichzelf en hangt.
+        # Een herstart van de dienst liep daardoor in de tijdlimiet van systemd en
+        # werd uiteindelijk hard afgebroken. Rekenkernen netjes stoppen en dan weg.
+        try:
+            ENGINES.shutdown()
+        finally:
+            sys.stdout.flush()
+            os._exit(0)
 
     signal.signal(signal.SIGINT, bye)
     signal.signal(signal.SIGTERM, bye)

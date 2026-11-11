@@ -193,6 +193,35 @@ async function haalDoel(poort) {
   await schiet('mobiel-werkruimte');
   await stuur('Emulation.clearDeviceMetricsOverride');
 
+  // 8. De chatpagina: een echte vraag stellen en het antwoord in beeld.
+  console.log('chatpagina (11434/chat)');
+  await ga(`${BASIS}:11434/chat`, 2500);
+  await js(`(() => {
+    const v = document.getElementById('invoer');
+    if (v) { v.value = 'Noem in één zin wat je voor mij kunt doen.'; v.dispatchEvent(new Event('input', { bubbles: true })); }
+    return true;
+  })()`);
+  await js(`(() => { const b = document.getElementById('stuur'); if (b) b.click(); return true; })()`);
+  let chatAntwoord = '';
+  for (let i = 0; i < 90; i++) {
+    await wacht(1000);
+    chatAntwoord = await js(`(() => {
+      const b = document.querySelectorAll('.bubbel.van-ai .tekst');
+      return b.length ? b[b.length - 1].innerText : '';
+    })()`);
+    const klaar = await js(`document.getElementById('stuur').disabled === false`);
+    if (klaar && chatAntwoord) break;
+  }
+  console.log(`  antwoord binnen: ${chatAntwoord.length} tekens`);
+  await wacht(600);
+  await schiet('chat');
+  await stuur('Emulation.setDeviceMetricsOverride', {
+    width: 390, height: 844, deviceScaleFactor: 2, mobile: true,
+  });
+  await wacht(900);
+  await schiet('chat-mobiel');
+  await stuur('Emulation.clearDeviceMetricsOverride');
+
   ws.close();
   chrome.kill('SIGKILL');
   // Het profiel opruimen mag nooit de hele run laten mislukken.

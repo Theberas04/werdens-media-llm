@@ -76,6 +76,24 @@ antwoord — op een CPU duurt dat ongeveer anderhalve minuut):
 De opnamen zijn gemaakt met `scripts/screenshots.js` en `scripts/record-demo.js`,
 zodat je ze na een wijziging zelf opnieuw kunt maken.
 
+## Chatten met de AI
+
+Open `http://<server>:11434/chat` in je browser — of klik op **Chatten** op de
+statuspagina. Typ je vraag, druk op Enter, en het antwoord komt woord voor woord
+binnen. Alles blijft op je eigen machine.
+
+![De chatpagina van de Werdens Media LLM](docs/img/chat.png)
+
+- Je kiest zelf het model in de kop, als er meer dan één in huis staat.
+- **Nieuw gesprek** begint opnieuw; het gesprek blijft staan als je de pagina
+  herlaadt of de volgende dag terugkomt.
+- **Stop** breekt een lang antwoord af — de engine stopt dan ook echt met rekenen
+  in plaats van door te werken voor een leeg scherm.
+- Onderaan staat wat het kostte: tekens, seconden en tekens per seconde.
+- Op een telefoon werkt dezelfde pagina:
+
+![De chatpagina op een telefoon](docs/img/chat-mobiel.png)
+
 ## Snel starten (op een Debian-machine)
 
 ```bash

@@ -44,6 +44,9 @@ printf 'laatste regels:\n'; binnen journalctl -u "$DIENST" -n 8 --no-pager 2>/de
 kop "4. De server en de poort"
 printf 'antwoordt de API? '; binnen_bash "curl -fsS --max-time 5 http://127.0.0.1:$POORT/api/version" || echo 'nee'
 printf 'luistert op:      \n'; binnen_bash "ss -ltnpH 2>/dev/null | grep ':$POORT' | sed 's/^/    /'" || echo '    niets op die poort'
+# De chatpagina is wat de gebruiker zelf opent; controleer dat hij heel is en niet
+# per ongeluk de huisstijl-plaatshouder toont (dat ging eerder mis).
+printf 'chatpagina:       '; binnen_bash "curl -fsS --max-time 5 -H 'Accept: text/html' http://127.0.0.1:$POORT/chat | grep -q 'id=\"invoer\"' && echo 'heel — open /chat in de browser' || echo 'niet gevonden'" || echo 'nee'
 printf 'processen:        \n'; binnen_bash 'ps -eo pid,rss,comm --sort=-rss | grep -E "python3|llama-server" | grep -v grep | sed "s/^/    /"' || true
 
 kop "5. Modellen op schijf"
