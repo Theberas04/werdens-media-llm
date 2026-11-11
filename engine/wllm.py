@@ -69,11 +69,20 @@ LEGE_PNG = base64.b64decode(
 )
 
 
-def logo_bytes() -> bytes:
+def logo_info() -> tuple[bytes, bool]:
+    """Het merklogo plus of dit de terugval is.
+
+    Ontbreekt het bestand, dan komt er een lege PNG door. Die mag NOOIT gecacht
+    worden: een browser bewaart hem anders een dag en dan staat er een rood blok
+    in de kop in plaats van het logo -- precies wat er bij de klant gebeurde."""
     try:
-        return LOGO.read_bytes()
+        return LOGO.read_bytes(), False
     except OSError:
-        return LEGE_PNG
+        return LEGE_PNG, True
+
+
+def logo_bytes() -> bytes:
+    return logo_info()[0]
 
 
 # Huisstijl van Werdens Monitor, letterlijk dezelfde tokens: licht, kaarten op wit,
@@ -187,7 +196,7 @@ main.chat{flex:1;min-height:0;padding:18px 26px 20px;display:flex;flex-direction
   .bubbel{max-width:100%}}
 </style></head><body>
 <header class="kop"><div class="merk">
-<span class="logo"><img src="/logo.png" alt="Werdens Media" onerror="this.style.display='none'"></span>
+<span class="logo"><img src="/merk.png" alt="Werdens Media" onerror="this.style.display='none'"></span>
 <div><div class="naam">Werdens Media LLM</div>
 <div class="sub">Werdens Media &middot; chat</div></div></div>
 <div class="kop-rechts">
@@ -1382,11 +1391,11 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _png(self, body: bytes, code: int = 200):
+    def _png(self, body: bytes, code: int = 200, cache: str = "public, max-age=300"):
         self.send_response(code)
         self.send_header("Content-Type", "image/png")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Cache-Control", cache)
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -1450,7 +1459,7 @@ class Handler(BaseHTTPRequestHandler):
             ".kaart-body{padding:14px}}"
             "</style></head><body>"
             "<header class=\"kop\"><div class=\"merk\">"
-            "<span class=\"logo\"><img src=\"/logo.png\" alt=\"Werdens Media\" "
+            "<span class=\"logo\"><img src=\"/merk.png\" alt=\"Werdens Media\" "
             "onerror=\"this.style.display='none'\"></span>"
             "<div><div class=\"naam\">Werdens Media LLM</div>"
             "<div class=\"sub\">Werdens Media · engine</div></div></div>"
@@ -1521,8 +1530,12 @@ class Handler(BaseHTTPRequestHandler):
     # -- routing -----------------------------------------------------------
     def do_GET(self):
         path = self.path.split("?")[0]
-        if path == "/logo.png":
-            return self._png(logo_bytes())
+        if path in ("/logo.png", "/merk.png"):
+            # /merk.png is de nieuwe naam: een browser die het oude /logo.png nog
+            # met de lege terugval in zijn cache heeft, haalt deze vanzelf opnieuw
+            # op. De terugval krijgt nooit een cachekop.
+            body, terugval = logo_info()
+            return self._png(body, cache="no-store" if terugval else "public, max-age=300")
         if path in ("/chat", "/chat/"):
             return self._html(CHAT_PAGINA.replace("__HUISSTIJL__", HUISSTIJL))
         if path in ("/api/version", "/version"):

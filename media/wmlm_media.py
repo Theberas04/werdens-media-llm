@@ -63,11 +63,20 @@ LEGE_PNG = base64.b64decode(
 )
 
 
-def logo_bytes() -> bytes:
+def logo_info() -> tuple[bytes, bool]:
+    """Het merklogo plus of dit de terugval is.
+
+    Ontbreekt het bestand, dan komt er een lege PNG door. Die mag NOOIT gecacht
+    worden: een browser bewaart hem anders een dag en dan staat er een rood blok
+    in de kop in plaats van het logo -- precies wat er bij de klant gebeurde."""
     try:
-        return LOGO.read_bytes()
+        return LOGO.read_bytes(), False
     except OSError:
-        return LEGE_PNG
+        return LEGE_PNG, True
+
+
+def logo_bytes() -> bytes:
+    return logo_info()[0]
 
 
 # Huisstijl van Werdens Monitor, letterlijk dezelfde tokens: licht, kaarten op wit,
@@ -397,7 +406,7 @@ PAGINA = """<!doctype html>
 </style></head><body>
 <header class="kop">
 <div class="merk">
-<span class="logo"><img src="/logo.png" alt="Werdens Media" onerror="this.style.display='none'"></span>
+<span class="logo"><img src="/merk.png" alt="Werdens Media" onerror="this.style.display='none'"></span>
 <div><div class="naam">Werdens Media LLM</div>
 <div class="sub">Werdens Media · spraak</div></div>
 </div>
@@ -496,10 +505,13 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("[wmlm-media] %s\n" % (format % args))
 
     # -- hulp -------------------------------------------------------------
-    def _stuur(self, body: bytes, code: int = 200, ctype: str = "application/json; charset=utf-8"):
+    def _stuur(self, body: bytes, code: int = 200, ctype: str = "application/json; charset=utf-8",
+               cache: str = ""):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        if cache:
+            self.send_header("Cache-Control", cache)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -551,8 +563,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         pad = self.path.split("?")[0]
-        if pad == "/logo.png":
-            return self._stuur(logo_bytes(), 200, "image/png")
+        if pad in ("/logo.png", "/merk.png"):
+            # Zie de engine: /merk.png om een oude lege terugval in de browsercache
+            # te omzeilen, en de terugval nooit cachen.
+            body, terugval = logo_info()
+            return self._stuur(body, 200, "image/png",
+                               "no-store" if terugval else "public, max-age=300")
         if pad in ("/", "/index.html"):
             # PAGINA is geen f-string (de JS zit vol accolades), dus de huisstijl komt
             # er via een plaatshouder in.
