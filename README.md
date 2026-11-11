@@ -71,7 +71,7 @@ documenten en de bronnen erbij. Een werkende voorbeeldpagina staat in
 **Een rondleiding in beeld** (echte opname, inclusief de wachttijd op een
 antwoord — op een CPU duurt dat ongeveer anderhalve minuut):
 
-[![Bekijk de rondleiding](docs/img/laag-2-antwoord.png)](docs/demo.mp4)
+[![Bekijk de rondleiding](docs/img/laag-2-werkruimte.png)](docs/demo.mp4)
 
 De opnamen zijn gemaakt met `scripts/screenshots.js` en `scripts/record-demo.js`,
 zodat je ze na een wijziging zelf opnieuw kunt maken.
