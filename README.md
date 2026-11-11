@@ -120,6 +120,14 @@ bash deploy/proxmox/provision-werdens-media-llm.sh <CTID>
 bash deploy/proxmox/check-werdens-media-llm.sh <CTID>
 ```
 
+**Start de container niet** en zie je alleen `Failed to spawn container`? Die regel
+zegt niet waaróm. Draai dan dit op de host; het haalt de echte oorzaak op en zegt
+wat je moet doen:
+
+```bash
+CTID=105 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Theberas04/werdens-media-llm/main/deploy/proxmox/diagnose-werdens-media-llm.sh)"
+```
+
 Instellingen gaan via env-variabelen vóór het commando: `CORES`, `MEMORY`, `DISK`,
 `STATIC_IP`, `GATEWAY`, `CT_HOSTNAME`. Het inrichtscript kiest het chatmodel zelf
 met de gemeten cijfers; wil je een eigen keuze, zet dan `WMLM_MODEL_REPO` en

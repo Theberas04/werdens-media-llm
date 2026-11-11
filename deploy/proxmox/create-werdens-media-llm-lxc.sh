@@ -10,7 +10,18 @@ set -euo pipefail
 
 CTID="${CTID:-}"
 CT_HOSTNAME="${CT_HOSTNAME:-werdens-media-llm}"
+# Niet elke host heeft 'local' en 'local-lvm' (een ZFS-host heeft bijvoorbeeld
+# local-zfs). Kies daarom zelf een opslag die actief is en ruimte heeft; een
+# verkeerde keuze merk je pas bij het starten, als de template er niet in past.
+if [ -z "${TEMPLATE_STORAGE:-}" ]; then
+  TEMPLATE_STORAGE="$(pvesm status --content vztmpl 2>/dev/null \
+    | awk 'NR>1 && $3=="active" {print $6, $1}' | sort -rn | head -1 | awk '{print $2}')"
+fi
 TEMPLATE_STORAGE="${TEMPLATE_STORAGE:-local}"
+if [ -z "${ROOTFS_STORAGE:-}" ]; then
+  ROOTFS_STORAGE="$(pvesm status --content rootdir 2>/dev/null \
+    | awk 'NR>1 && $3=="active" {print $6, $1}' | sort -rn | head -1 | awk '{print $2}')"
+fi
 ROOTFS_STORAGE="${ROOTFS_STORAGE:-local-lvm}"
 BRIDGE="${BRIDGE:-vmbr0}"
 STATIC_IP="${STATIC_IP:-}"
@@ -68,9 +79,17 @@ ARGS=("$CTID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}"
   --features nesting=1
   --description "Werdens Media LLM — eigen LLM-server (Ollama- en OpenAI-API)")
 
-log "Container $CTID aanmaken (Debian $DEBIAN_MAJOR, ${CORES} cores, ${MEMORY} MB, ${DISK} GB, ${STATIC_IP:-DHCP})…"
+log "Container $CTID aanmaken (Debian $DEBIAN_MAJOR, ${CORES} cores, ${MEMORY} MB, ${DISK} GB op $ROOTFS_STORAGE, ${STATIC_IP:-DHCP})…"
 pct create "${ARGS[@]}"
-pct start "$CTID" || die "Container startte niet; inspecteer: pct config $CTID"
+if ! pct start "$CTID"; then
+  warn "Container $CTID startte niet. De oorzaak staat in de regels hierboven;"
+  warn "dit is de volledige uitleg van de laatste poging:"
+  pct start "$CTID" --debug 2>&1 | tail -25 | sed 's/^/    /'
+  printf '\n' >&2
+  die "Diagnose met uitleg in gewone taal:
+  CTID=$CTID bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Theberas04/werdens-media-llm/main/deploy/proxmox/diagnose-werdens-media-llm.sh)\"
+De container is aangemaakt maar draait niet. Weghalen kan met: pct destroy $CTID"
+fi
 ready=0
 for _ in $(seq 1 60); do pct exec "$CTID" -- true >/dev/null 2>&1 && { ready=1; break; }; sleep 2; done
 [ "$ready" = 1 ] || die "Container werd niet bereikbaar via pct exec."

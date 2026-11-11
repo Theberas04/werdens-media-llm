@@ -8,6 +8,7 @@ Alles hier draai je **als root op de Proxmox-host**, niet in een container.
 | `install.sh` | Haalt de kit op naar `/opt/werdens-media-llm-kit` en draait het maakscript. Dit is de one-liner. |
 | `provision-werdens-media-llm.sh <CTID>` | Richt de stack in binnen een bestaande container (of opnieuw, om te herstellen). |
 | `check-werdens-media-llm.sh <CTID>` | Controle in één keer: container, systeem, dienst, engine, modellen, poort, contextvenster en een echte testvraag. |
+| `diagnose-werdens-media-llm.sh` | Als de container niet start: probeert het opnieuw met volledige uitleg, zoekt de bekende oorzaken op en zegt wat je moet doen. |
 | `update-from-github.sh <CTID>` | Haalt de nieuwste versie van GitHub en draait de inrichting opnieuw. Modellen blijven staan. |
 | `provision-media.sh <CTID>` | Alleen de medialaag: spraak naar tekst (whisper.cpp) en spraak uit (Piper met Nederlandse stemmen). Draait op CPU. |
 
@@ -54,14 +55,46 @@ werkt **niet** -- dat script heeft de rest van de kit nodig (engine, medialaag).
 
 Wordt de repo weer privé, zet dan `GH_TOKEN=<token>` voor het commando.
 
+## De container start niet
+
+`pct start` faalt wel eens met alleen `__lxc_start: … Failed to spawn container`.
+Die regel zegt níet waaróm; de oorzaak staat in de regels erboven, en die zie je
+alleen met `--debug`. Draai daarom dit, als root op de host:
+
+```bash
+CTID=105 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Theberas04/werdens-media-llm/main/deploy/proxmox/diagnose-werdens-media-llm.sh)"
+```
+
+Dat probeert het nog één keer met volledige uitleg, zoekt de bekende oorzaken op en
+print in gewone taal wat je moet doen. Zonder `CTID=` zoekt het zelf de container
+met de hostnaam `werdens-media-llm`.
+
+De drie die het vaakst voorkomen:
+
+1. **De schijf van de container is leeg** (`Failed to exec "/sbin/init"`, `/etc not
+   present in CT`). De container is aangemaakt, maar de template is er niet in
+   gekomen. Meestal door de gekozen opslag. Het maakscript kiest die nu zelf (de
+   actieve opslag met de meeste ruimte) in plaats van blind `local-lvm`; met
+   `ROOTFS_STORAGE=` wijs je er zelf een aan. Daarna: `pct destroy <CTID>` en
+   opnieuw installeren.
+2. **De host houdt het tegen** (`Failed to clone a new set of namespaces`, `Failed
+   to mount "proc"`, `Failed to load bpf program`). Dan faalt élke container op die
+   machine, meestal na een kernel- of lxc-update: `apt-get install -y --reinstall
+   lxc-pve apparmor && systemctl restart apparmor`, of de host herstarten.
+3. **De opslag geeft een symlink-pad** (`symlink encountered`). Bekende fout met
+   iSCSI-/LVM-opslag in Proxmox 9. Kies een andere opslag voor de schijf.
+
 ## Instellingen (env-variabelen)
 
 | Variabele | Default | Betekenis |
 |---|---|---|
 | `CTID` | eerste vrije nummer | containernummer |
 | `CT_HOSTNAME` | `werdens-media-llm` | hostnaam van de container |
-| `CORES` / `MEMORY` / `SWAP` | `4` / `8192` / `2048` | rekenkracht en geheugen (MB) |
-| `DISK` | `40` | schijf in GB — modellen zijn groot |
+| `CORES` / `MEMORY` / `SWAP` | `4` / `12288` / `2048` | rekenkracht en geheugen (MB) |
+| `DISK` | `60` | schijf in GB — modellen zijn groot |
+| `ROOTFS_STORAGE` | actieve opslag met de meeste ruimte | waar de schijf van de container komt |
+| `TEMPLATE_STORAGE` | idem, voor templates | waar de Debian-template komt te staan |
+| `DEBIAN_MAJOR` | `13` | Debian-versie van de container |
 | `STATIC_IP` / `GATEWAY` | leeg (DHCP) | vast adres, bijvoorbeeld `192.168.1.100/24` |
 | `BRIDGE` | `vmbr0` | netwerkbrug |
 | `WMLM_MODEL_REPO` / `WMLM_MODEL_FILE` | Qwen3-4B-Instruct-2507 Q4_K_M | standaard chatmodel |
