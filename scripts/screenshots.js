@@ -117,7 +117,9 @@ async function haalDoel(poort) {
   await ga(`${BASIS}:8090/`, 2500);
   await js(`(() => { if (typeof kies === 'function') kies(${JSON.stringify(WERKRUIMTE)}); return true; })()`);
   await wacht(2000);
-  const docs = await js(`document.querySelectorAll('#docs .doc, #docs li').length`);
+  // Het documentenpaneel rendert per document een div.bron; een andere selector
+  // telt nul en meldt onterecht dat er niets in de werkruimte staat.
+  const docs = await js(`document.querySelectorAll('#docs .bron').length`);
   console.log(`  documenten in beeld: ${docs}`);
   await schiet('laag-2-werkruimte');
 
