@@ -5,6 +5,7 @@ Alles hier draai je **als root op de Proxmox-host**, niet in een container.
 | Script | Wat het doet |
 |---|---|
 | `create-werdens-media-llm-lxc.sh` | Maakt een unprivileged Debian-LXC aan en richt de hele stack daarin in. Dit is de makkelijkste weg. |
+| `install.sh` | Haalt de kit op naar `/opt/werdens-media-llm-kit` en draait het maakscript. Dit is de one-liner. |
 | `provision-werdens-media-llm.sh <CTID>` | Richt de stack in binnen een bestaande container (of opnieuw, om te herstellen). |
 | `check-werdens-media-llm.sh <CTID>` | Controle in één keer: container, systeem, dienst, engine, modellen, poort, contextvenster en een echte testvraag. |
 | `update-from-github.sh <CTID>` | Haalt de nieuwste versie van GitHub en draait de inrichting opnieuw. Modellen blijven staan. |
@@ -12,36 +13,44 @@ Alles hier draai je **als root op de Proxmox-host**, niet in een container.
 
 ## Snel
 
+Plak dit in de shell van je Proxmox-host (als root):
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Theberas04/werdens-media-llm/main/deploy/proxmox/install.sh)"
+```
+
+Dat haalt de kit op naar `/opt/werdens-media-llm-kit`, maakt een unprivileged
+Debian-container aan en richt de hele stack daarin in. De kit blijft staan, zodat
+je daarna `check-werdens-media-llm.sh` en `update-from-github.sh` bij de hand hebt.
+De repo staat op openbaar, dus dit werkt zonder inlog.
+
+**Eerst kijken wat er gebeurt**, zonder dat er iets wordt aangemaakt:
+
+```bash
+DROOG=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Theberas04/werdens-media-llm/main/deploy/proxmox/install.sh)"
+```
+
+**Meer rekenkracht en een vast adres** meegeven:
+
+```bash
+CORES=6 MEMORY=16384 DISK=80 STATIC_IP=192.168.1.100/24 GATEWAY=192.168.1.1 \
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/Theberas04/werdens-media-llm/main/deploy/proxmox/install.sh)"
+```
+
+**Liever zelf de bestanden in handen** (dan houd je de kit in je eigen map):
+
 ```bash
 git clone https://github.com/Theberas04/werdens-media-llm.git
 cd werdens-media-llm
 bash deploy/proxmox/create-werdens-media-llm-lxc.sh
 ```
 
-De repo staat op openbaar, dus dit werkt zonder inlog. Liever geen clone? Dan kan
-het ook als ZIP of met een one-liner:
-
-**A. ZIP.** Download op de GitHub-pagina *Code → Download ZIP*, zet het bestand op
-de Proxmox-host en pak het daar uit:
-
-```bash
-unzip werdens-media-llm-main.zip && cd werdens-media-llm-main
-bash deploy/proxmox/create-werdens-media-llm-lxc.sh
-```
-
-**B. One-liner.** De kit haalt zichzelf op en draait direct:
-
-```bash
-d=$(mktemp -d)
-curl -fsSL https://codeload.github.com/Theberas04/werdens-media-llm/tar.gz/refs/heads/main \
-  | tar xz -C "$d" --strip-components=1
-bash "$d/deploy/proxmox/create-werdens-media-llm-lxc.sh"
-```
+Of download op de GitHub-pagina *Code → Download ZIP*, zet het bestand op de
+Proxmox-host en pak het daar uit met `unzip werdens-media-llm-main.zip`.
 
 Let op: `create-werdens-media-llm-lxc.sh` alleen via `bash <(curl ...)` ophalen
 werkt **niet** -- dat script heeft de rest van de kit nodig (engine, medialaag).
-De drie regels hierboven halen daarom de hele map op. Bijwerken doe je met de
-clone of de ZIP, zodat `update-from-github.sh` alles vindt.
+`install.sh` haalt daarom de hele map op; daarom is dat de one-liner.
 
 Wordt de repo weer privé, zet dan `GH_TOKEN=<token>` voor het commando.
 

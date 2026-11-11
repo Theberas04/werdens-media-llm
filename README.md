@@ -90,14 +90,30 @@ cd .. && python3 engine/wllm.py serve      # luistert op :11434
 
 ## Installeren op Proxmox
 
-Op de **Proxmox-host**, als root:
+Eén regel, in de shell van je **Proxmox-host** (als root):
 
 ```bash
-# de hele stack in één unprivileged LXC (Debian 13, 4 cores, 12 GB, 60 GB schijf)
-bash deploy/proxmox/create-werdens-media-llm-lxc.sh
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Theberas04/werdens-media-llm/main/deploy/proxmox/install.sh)"
 ```
 
-Of stap voor stap, in een bestaande container:
+Dat haalt de kit op naar `/opt/werdens-media-llm-kit` en zet de hele stack in één
+unprivileged LXC (Debian 13, 4 cores, 12 GB, 60 GB schijf). Reken op een kwartier
+tot een half uur: Debian ophalen, llama.cpp bouwen en de modellen downloaden.
+
+Liever eerst kijken wat er gebeurt, of meer rekenkracht meegeven:
+
+```bash
+# niets aanmaken, alleen de kit ophalen en vertellen wat er zou gebeuren
+DROOG=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Theberas04/werdens-media-llm/main/deploy/proxmox/install.sh)"
+
+# 6 cores, 16 GB en een vast adres
+CORES=6 MEMORY=16384 DISK=80 STATIC_IP=192.168.1.100/24 GATEWAY=192.168.1.1 \
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/Theberas04/werdens-media-llm/main/deploy/proxmox/install.sh)"
+```
+
+Zelf de bestanden in handen houden kan ook: `git clone` de repo en draai
+`bash deploy/proxmox/create-werdens-media-llm-lxc.sh`. Of stap voor stap, in een
+bestaande container:
 
 ```bash
 bash deploy/proxmox/provision-werdens-media-llm.sh <CTID>
