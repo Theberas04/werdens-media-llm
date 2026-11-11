@@ -13,29 +13,37 @@ Alles hier draai je **als root op de Proxmox-host**, niet in een container.
 ## Snel
 
 ```bash
-git clone https://github.com/Theberas04/werdens-media-llm.git   # repo is PRIVÉ
+git clone https://github.com/Theberas04/werdens-media-llm.git
 cd werdens-media-llm
 bash deploy/proxmox/create-werdens-media-llm-lxc.sh
 ```
 
-Omdat de repo privé is, werkt die clone alleen met inlog. Twee routes:
+De repo staat op openbaar, dus dit werkt zonder inlog. Liever geen clone? Dan kan
+het ook als ZIP of met een one-liner:
 
-**A. ZIP (geen token nodig).** Download op de GitHub-pagina *Code → Download ZIP*,
-zet het bestand op de Proxmox-host en pak het daar uit:
+**A. ZIP.** Download op de GitHub-pagina *Code → Download ZIP*, zet het bestand op
+de Proxmox-host en pak het daar uit:
 
 ```bash
 unzip werdens-media-llm-main.zip && cd werdens-media-llm-main
 bash deploy/proxmox/create-werdens-media-llm-lxc.sh
 ```
 
-**B. Token.** Gebruik een token met leesrechten op de repo:
+**B. One-liner.** De kit haalt zichzelf op en draait direct:
 
 ```bash
-git clone https://<token>@github.com/Theberas04/werdens-media-llm.git
+d=$(mktemp -d)
+curl -fsSL https://codeload.github.com/Theberas04/werdens-media-llm/tar.gz/refs/heads/main \
+  | tar xz -C "$d" --strip-components=1
+bash "$d/deploy/proxmox/create-werdens-media-llm-lxc.sh"
 ```
 
-Zet de repo later op openbaar, dan werkt alles zonder token en kun je ook
-`update-from-github.sh` als one-liner vanaf GitHub draaien.
+Let op: `create-werdens-media-llm-lxc.sh` alleen via `bash <(curl ...)` ophalen
+werkt **niet** -- dat script heeft de rest van de kit nodig (engine, medialaag).
+De drie regels hierboven halen daarom de hele map op. Bijwerken doe je met de
+clone of de ZIP, zodat `update-from-github.sh` alles vindt.
+
+Wordt de repo weer privé, zet dan `GH_TOKEN=<token>` voor het commando.
 
 ## Instellingen (env-variabelen)
 
