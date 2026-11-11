@@ -1623,13 +1623,65 @@ def api(path: str, payload: dict | None = None, stream: bool = False, host: str 
             yield json.load(r)
 
 
+def _ruim_achterblijvers_op() -> int:
+    """Ruim rekenkernen op die van een vorige start zijn achtergebleven.
+
+    Een harde stop (kill -9, stroomstoring, crash) laat de rekenkern van
+    llama.cpp achter. Die houdt zijn poort én zijn geheugen vast: de nieuwe start
+    krijgt dan geen verbinding meer (de poort is bezet) en op een kleine machine
+    loopt het geheugen vol. Alleen processen die van deze engine afkomstig zijn en
+    waarvan de ouder geen draaiende engine meer is, worden opgeruimd -- twee
+    engines naast elkaar blijven dus met rust gelaten."""
+    levende_engines = set()
+    for naam in os.listdir("/proc"):
+        if not naam.isdigit():
+            continue
+        try:
+            with open(f"/proc/{naam}/cmdline", "rb") as f:
+                cmd = f.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        if "wllm.py" in cmd:
+            levende_engines.add(int(naam))
+
+    opgeruimd = 0
+    for naam in os.listdir("/proc"):
+        if not naam.isdigit():
+            continue
+        pid = int(naam)
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmd = f.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        if str(ENGINE) not in cmd or "llama-server" not in cmd:
+            continue
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as f:
+                stat = f.read().decode("utf-8", "replace")
+            ppid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            continue
+        if ppid in levende_engines:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+            opgeruimd += 1
+        except OSError:
+            pass
+    return opgeruimd
+
+
 def cmd_serve(_a):
+    opgeruimd = _ruim_achterblijvers_op()
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"wllm {VERSION} — engine: {ENGINE}")
     print(f"  Ollama-API : http://{HOST}:{PORT}/api/...")
     print(f"  OpenAI-API : http://{HOST}:{PORT}/v1/...")
     print(f"  modellen   : {MODELS_DIR}")
     print(f"  threads={THREADS} ctx={CTX} keep_alive={KEEP_ALIVE}s")
+    if opgeruimd:
+        print(f"  opgeruimd  : {opgeruimd} achtergebleven rekenkern(en) van een vorige start")
     if GPU.get("aanwezig"):
         print(f"  GPU        : {GPU.get('naam')} ({GPU.get('vram_mb')} MB) — "
               f"n_gpu_layers={NGL}, kv={KV_TYPE}")
