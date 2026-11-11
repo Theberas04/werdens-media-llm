@@ -88,9 +88,15 @@ Werdens Media LLM staat in LXC $CTID.
   Ollama   : http://${IP:-<ip>}:11434/api/...
   OpenAI   : http://${IP:-<ip>}:11434/v1/...
   controle : bash $SCRIPT_DIR/check-werdens-media-llm.sh $CTID
-  bijwerken: bash <(curl -fsSL https://raw.githubusercontent.com/Theberas04/werdens-media-llm/main/deploy/proxmox/update-from-github.sh) $CTID
+  bijwerken: (vanuit de map van deze kit) bash update-from-github.sh $CTID
+             de repo is privé: zet er GH_TOKEN=<token> voor
 
 Koppelen aan Hermes (per sessie, zonder je configuratie te veranderen):
-  hermes chat -q "vraag" -m qwen3-4b-instruct-2507-q4_k_m \\
+  (naam van het gekozen model: pct exec $CTID -- python3 $TARGET/wllm.py list)
+  hermes chat -q "vraag" -m Llama-3.2-3B-Instruct-Q4_K_M \\
     --provider custom --base-url http://${IP:-<ip>}:11434/v1 --api-key wmlm-local
+
+Spraak proberen (medialaag, poort 8091):
+  curl -s http://${IP:-<ip>}:8091/v1/audio/speech \\
+    -d '{"input":"Hallo, dit is de Werdens Media LLM."}' -o hallo.wav
 EOF

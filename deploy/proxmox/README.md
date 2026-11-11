@@ -13,10 +13,29 @@ Alles hier draai je **als root op de Proxmox-host**, niet in een container.
 ## Snel
 
 ```bash
-git clone https://github.com/Theberas04/werdens-media-llm.git
+git clone https://github.com/Theberas04/werdens-media-llm.git   # repo is PRIVÉ
 cd werdens-media-llm
 bash deploy/proxmox/create-werdens-media-llm-lxc.sh
 ```
+
+Omdat de repo privé is, werkt die clone alleen met inlog. Twee routes:
+
+**A. ZIP (geen token nodig).** Download op de GitHub-pagina *Code → Download ZIP*,
+zet het bestand op de Proxmox-host en pak het daar uit:
+
+```bash
+unzip werdens-media-llm-main.zip && cd werdens-media-llm-main
+bash deploy/proxmox/create-werdens-media-llm-lxc.sh
+```
+
+**B. Token.** Gebruik een token met leesrechten op de repo:
+
+```bash
+git clone https://<token>@github.com/Theberas04/werdens-media-llm.git
+```
+
+Zet de repo later op openbaar, dan werkt alles zonder token en kun je ook
+`update-from-github.sh` als one-liner vanaf GitHub draaien.
 
 ## Instellingen (env-variabelen)
 
