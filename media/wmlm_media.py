@@ -70,6 +70,66 @@ def logo_bytes() -> bytes:
         return LEGE_PNG
 
 
+# Huisstijl van Werdens Monitor, letterlijk dezelfde tokens: licht, kaarten op wit,
+# blauw #2ea3f2 als accent en de merk-gradient (cyaan -> blauw) voor de hoofdknoppen.
+HUISSTIJL = """
+:root{
+  --bg:#f4f7fb; --pane:#ffffff; --pane2:#f7fafd; --pane3:#eef3fa;
+  --line:#e3eaf4; --line2:#cfdaeb;
+  --txt:#0f172a; --muted:#55657f; --muted2:#8296ae;
+  --accent:#2ea3f2; --accent-d:#1e73be; --accent-soft:#e8f4fd;
+  --ok:#059669; --ok-soft:#e6f6ef;
+  --amber:#b45309; --amber-soft:#fdf1e2;
+  --red:#dc2626; --red-soft:#fdeaea;
+  --blue:#1e73be; --blue-soft:#e8f4fd;
+  --merk:linear-gradient(118deg,#5ff0e8 0%,#2ea3f2 55%,#1e73be 100%);
+  --r:16px; --r-klein:10px; --hoogte:40px;
+  --schaduw:0 1px 2px rgba(15,23,42,.05),0 12px 28px -20px rgba(15,23,42,.3);
+  --font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:var(--txt);font:15px/1.5 var(--font);
+  -webkit-font-smoothing:antialiased;
+  background:radial-gradient(1100px 520px at 90% -10%,rgba(95,240,232,.12),transparent 62%),
+             radial-gradient(900px 480px at -8% -4%,rgba(74,76,248,.08),transparent 58%),var(--bg)}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+header.kop{position:sticky;top:0;z-index:30;background:rgba(255,255,255,.88);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
+  padding:12px 26px;display:flex;align-items:center;gap:11px}
+.merk{display:flex;align-items:center;gap:11px;min-width:0}
+.merk .logo{width:44px;height:44px;flex:none}
+.merk .logo img{width:100%;height:100%;object-fit:contain;display:block}
+.merk .naam{font-weight:700;font-size:17px;letter-spacing:-.025em;white-space:nowrap}
+.merk .sub{font-size:11.5px;color:var(--muted2);letter-spacing:.08em;text-transform:uppercase;
+  white-space:nowrap}
+.kop-rechts{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;
+  color:var(--muted2);flex:none}
+.kaart{background:var(--pane);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--schaduw)}
+.kaart-kop{background:var(--pane2);border-bottom:1px solid var(--line);
+  border-radius:var(--r) var(--r) 0 0;padding:14px 18px 12px}
+.kaart-kop h2{margin:0;font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);font-weight:700}
+.kaart-body{padding:16px 18px}
+.knop{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:var(--hoogte);
+  padding:0 14px;border-radius:var(--r-klein);background:var(--pane);border:1px solid var(--line2);
+  color:var(--txt);font:inherit;font-weight:600;cursor:pointer}
+.knop:hover{background:var(--pane2);border-color:#b6c7dd}
+.knop.primair{background:var(--merk);border-color:transparent;color:#fff;font-weight:700}
+input,select,textarea{font:inherit;color:var(--txt);background:var(--pane);border:1px solid var(--line2);
+  border-radius:var(--r-klein);padding:0 12px;height:var(--hoogte);width:100%}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+textarea{height:auto;padding:10px 12px;resize:vertical}
+code{font-family:var(--mono);font-size:12.5px;background:var(--pane3);border:1px solid var(--line);
+  border-radius:6px;padding:1px 6px}
+.tabel{width:100%;border-collapse:collapse;font-size:14px}
+.tabel th{text-align:left;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted2);font-weight:700;padding:0 10px 8px 0}
+.tabel td{padding:9px 10px 9px 0;border-top:1px solid var(--line)}
+.ok{color:var(--ok)}
+"""
+
+
 
 def _uitvoerbaar(pad: Path) -> bool:
     return pad.exists() and os.access(pad, os.X_OK)
@@ -309,38 +369,34 @@ PAGINA = """<!doctype html>
 <html lang="nl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Werdens Media LLM — spraak</title><style>
- /* Huisstijl Werdens Media: navy basis met blauw #2ea3f2 en mint #2ee6a8. */
- :root{--bg:#0e151d;--pane:#0f172a;--line:#1e2f45;--txt:#f4f7fb;--dim:#b6c7dd;
-       --blauw:#2ea3f2;--mint:#2ee6a8;--licht:#c9d8fb;--teal:var(--mint);--sky:var(--blauw)}
- *{box-sizing:border-box}
- body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 ui-sans-serif,system-ui,"Segoe UI",sans-serif}
- header{padding:22px 28px 16px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#132133,#0e151d)}
- .kop{display:flex;align-items:center;gap:16px}
- .kop img{height:46px;width:auto;display:block;flex:0 0 auto}
- h1{margin:0;font-size:26px}h1 span{background:linear-gradient(90deg,var(--teal),var(--sky));
-   -webkit-background-clip:text;background-clip:text;color:transparent}
- .sub{color:var(--dim);font-size:13px;margin-top:4px}
- main{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:22px;max-width:1200px}
- .pane{background:var(--pane);border:1px solid var(--line);border-radius:14px;padding:18px}
- h2{margin:0 0 4px;font-size:17px}
- .hint{color:var(--dim);font-size:12px;margin-bottom:12px}
- textarea,input,select,button{font:inherit;color:var(--txt);background:#0b1220;
-   border:1px solid var(--line);border-radius:9px;padding:10px 12px;width:100%}
+ /* Huisstijl Werdens Monitor: licht, kaarten op wit, blauw als accent. */
+ __HUISSTIJL__
+ main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:20px 26px 34px;max-width:1200px}
+ .pane{background:var(--pane);border:1px solid var(--line);border-radius:var(--r);
+       box-shadow:var(--schaduw);padding:18px}
+ h2{margin:0 0 4px;font-size:16px}
+ .hint{color:var(--muted2);font-size:12px;margin-bottom:12px}
+ textarea,input,select,button{font:inherit;color:var(--txt);background:var(--pane);
+   border:1px solid var(--line2);border-radius:var(--r-klein);padding:10px 12px;width:100%}
  textarea{min-height:120px;resize:vertical}
- button{cursor:pointer;background:linear-gradient(90deg,#1e73be,#2ea3f2);border:0;font-weight:600;margin-top:10px}
- button.rec{background:linear-gradient(90deg,#b91c1c,#7f1d1d)}
- button:hover{filter:brightness(1.12)}
- .uit{margin-top:14px;padding:12px;border:1px dashed var(--line);border-radius:10px;
-      min-height:52px;white-space:pre-wrap;background:#0b1220}
- .status{font-size:12px;color:var(--dim);margin-top:8px}
- .ok{color:var(--teal)}.fout{color:#fca5a5}
+ button{cursor:pointer;background:var(--merk);border:0;color:#fff;font-weight:700;margin-top:10px;
+   border-radius:var(--r-klein)}
+ button.rec{background:linear-gradient(180deg,#ef4444,#dc2626)}
+ button:hover{filter:brightness(1.03)}
+ .uit{margin-top:14px;padding:12px;border:1px dashed var(--line2);border-radius:var(--r-klein);
+      min-height:52px;white-space:pre-wrap;background:var(--pane2)}
+ .status{font-size:12px;color:var(--muted2);margin-top:8px}
+ .ok{color:var(--ok)}.fout{color:var(--red)}
  @media(max-width:760px){main{grid-template-columns:1fr}}
 </style></head><body>
-<header><div class="kop">
-<img src="/logo.png" alt="Werdens Media" onerror="this.style.display='none'">
-<div><h1>Werdens <span>Media LLM</span> — spraak</h1>
-<div class="sub">Spraak naar tekst met Whisper, spraak uit met Piper. Lokaal, op CPU, geen abonnement.
-<span id="status" class="status"></span></div></div></div></header>
+<header class="kop">
+<div class="merk">
+<span class="logo"><img src="/logo.png" alt="Werdens Media" onerror="this.style.display='none'"></span>
+<div><div class="naam">Werdens Media LLM</div>
+<div class="sub">Werdens Media · spraak</div></div>
+</div>
+<div class="kop-rechts"><span id="status" class="status"></span></div>
+</header>
 <main>
   <div class="pane">
     <h2>Spraak naar tekst</h2>
@@ -492,7 +548,10 @@ class Handler(BaseHTTPRequestHandler):
         if pad == "/logo.png":
             return self._stuur(logo_bytes(), 200, "image/png")
         if pad in ("/", "/index.html"):
-            return self._stuur(PAGINA.encode(), 200, "text/html; charset=utf-8")
+            # PAGINA is geen f-string (de JS zit vol accolades), dus de huisstijl komt
+            # er via een plaatshouder in.
+            pagina = PAGINA.replace("__HUISSTIJL__", HUISSTIJL)
+            return self._stuur(pagina.encode(), 200, "text/html; charset=utf-8")
         if pad == "/health":
             return self._json(
                 {

@@ -74,6 +74,66 @@ def logo_bytes() -> bytes:
         return LEGE_PNG
 
 
+# Huisstijl van Werdens Monitor, letterlijk dezelfde tokens: licht, kaarten op wit,
+# blauw #2ea3f2 als accent en de merk-gradient (cyaan -> blauw) voor de hoofdknoppen.
+HUISSTIJL = """
+:root{
+  --bg:#f4f7fb; --pane:#ffffff; --pane2:#f7fafd; --pane3:#eef3fa;
+  --line:#e3eaf4; --line2:#cfdaeb;
+  --txt:#0f172a; --muted:#55657f; --muted2:#8296ae;
+  --accent:#2ea3f2; --accent-d:#1e73be; --accent-soft:#e8f4fd;
+  --ok:#059669; --ok-soft:#e6f6ef;
+  --amber:#b45309; --amber-soft:#fdf1e2;
+  --red:#dc2626; --red-soft:#fdeaea;
+  --blue:#1e73be; --blue-soft:#e8f4fd;
+  --merk:linear-gradient(118deg,#5ff0e8 0%,#2ea3f2 55%,#1e73be 100%);
+  --r:16px; --r-klein:10px; --hoogte:40px;
+  --schaduw:0 1px 2px rgba(15,23,42,.05),0 12px 28px -20px rgba(15,23,42,.3);
+  --font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:var(--txt);font:15px/1.5 var(--font);
+  -webkit-font-smoothing:antialiased;
+  background:radial-gradient(1100px 520px at 90% -10%,rgba(95,240,232,.12),transparent 62%),
+             radial-gradient(900px 480px at -8% -4%,rgba(74,76,248,.08),transparent 58%),var(--bg)}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+header.kop{position:sticky;top:0;z-index:30;background:rgba(255,255,255,.88);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
+  padding:12px 26px;display:flex;align-items:center;gap:11px}
+.merk{display:flex;align-items:center;gap:11px;min-width:0}
+.merk .logo{width:44px;height:44px;flex:none}
+.merk .logo img{width:100%;height:100%;object-fit:contain;display:block}
+.merk .naam{font-weight:700;font-size:17px;letter-spacing:-.025em;white-space:nowrap}
+.merk .sub{font-size:11.5px;color:var(--muted2);letter-spacing:.08em;text-transform:uppercase;
+  white-space:nowrap}
+.kop-rechts{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;
+  color:var(--muted2);flex:none}
+.kaart{background:var(--pane);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--schaduw)}
+.kaart-kop{background:var(--pane2);border-bottom:1px solid var(--line);
+  border-radius:var(--r) var(--r) 0 0;padding:14px 18px 12px}
+.kaart-kop h2{margin:0;font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);font-weight:700}
+.kaart-body{padding:16px 18px}
+.knop{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:var(--hoogte);
+  padding:0 14px;border-radius:var(--r-klein);background:var(--pane);border:1px solid var(--line2);
+  color:var(--txt);font:inherit;font-weight:600;cursor:pointer}
+.knop:hover{background:var(--pane2);border-color:#b6c7dd}
+.knop.primair{background:var(--merk);border-color:transparent;color:#fff;font-weight:700}
+input,select,textarea{font:inherit;color:var(--txt);background:var(--pane);border:1px solid var(--line2);
+  border-radius:var(--r-klein);padding:0 12px;height:var(--hoogte);width:100%}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+textarea{height:auto;padding:10px 12px;resize:vertical}
+code{font-family:var(--mono);font-size:12.5px;background:var(--pane3);border:1px solid var(--line);
+  border-radius:6px;padding:1px 6px}
+.tabel{width:100%;border-collapse:collapse;font-size:14px}
+.tabel th{text-align:left;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted2);font-weight:700;padding:0 10px 8px 0}
+.tabel td{padding:9px 10px 9px 0;border-top:1px solid var(--line)}
+.ok{color:var(--ok)}
+"""
+
+
 # --------------------------------------------------------------------------- #
 # Configuratie (env-vars met dezelfde geest als OLLAMA_*)
 # --------------------------------------------------------------------------- #
@@ -959,45 +1019,23 @@ class Handler(BaseHTTPRequestHandler):
             "<!doctype html><html lang=\"nl\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"<title>Werdens Media LLM — engine {VERSION}</title><style>"
-            # Huisstijl Werdens Media: navy basis met blauw #2ea3f2 en mint #2ee6a8.
-            ":root{--bg:#0e151d;--pane:#0f172a;--line:#1e2f45;--txt:#f4f7fb;--dim:#b6c7dd;"
-            "--blauw:#2ea3f2;--mint:#2ee6a8;--licht:#c9d8fb;"
-            "--teal:var(--mint);--sky:var(--blauw)}"
-            "*{box-sizing:border-box}"
-            "body{margin:0;background:var(--bg);color:var(--txt);"
-            "font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}"
-            "header{padding:22px 32px 18px;border-bottom:1px solid var(--line);"
-            "background:linear-gradient(180deg,#132133,#0e151d)}"
-            ".kop{display:flex;align-items:center;gap:16px}"
-            ".kop img{height:46px;width:auto;display:block}"
-            "h1{margin:0 0 6px;font-size:26px;letter-spacing:-.3px}"
-            "h1 span{color:var(--teal)}"
-            ".sub{color:var(--dim);font-size:13px}"
-            "main{padding:22px 32px 40px;display:grid;gap:18px;max-width:1180px}"
-            ".kaart{background:var(--pane);border:1px solid var(--line);border-radius:14px;padding:16px 18px}"
-            ".kaart h2{margin:0 0 12px;font-size:13px;text-transform:uppercase;"
-            "letter-spacing:.9px;color:var(--dim);font-weight:600}"
-            "dl{display:grid;grid-template-columns:180px 1fr;gap:6px 14px;margin:0}"
-            "dt{color:var(--dim);font-size:13px}dd{margin:0}"
-            "table{width:100%;border-collapse:collapse;font-size:14px}"
-            "th{text-align:left;color:var(--dim);font-weight:600;font-size:12px;"
-            "text-transform:uppercase;letter-spacing:.6px;padding-bottom:8px}"
-            "td{padding:7px 0;border-top:1px solid var(--line)}"
-            ".naam{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--teal)}"
-            ".grijs{color:var(--dim)}"
-            "code{background:#0b1220;border:1px solid var(--line);border-radius:5px;"
-            "padding:1px 6px;font-size:13px}"
-            "a{color:var(--sky)}"
-            ".ok{color:var(--teal)}"
-            "footer{padding:0 32px 32px;color:var(--dim);font-size:13px}"
-            "</style></head><body><header>"
-            "<div class=\"kop\"><img src=\"/logo.png\" alt=\"Werdens Media\" "
-            "onerror=\"this.style.display='none'\"><div>"
-            f"<h1>Werdens <span>Media LLM</span> — engine</h1>"
-            "<div class=\"sub\">Eigen LLM-server met de Ollama-API én de OpenAI-API op dezelfde "
-            f"poort. Alles lokaal, zonder abonnement en zonder tokenkosten.</div>"
-            "</div></div></header><main>"
-            "<div class=\"kaart\"><h2>Status</h2><dl>"
+            f"{HUISSTIJL}"
+            "main{padding:22px 26px 40px;display:grid;gap:16px;max-width:1120px}"
+            "dl{display:grid;grid-template-columns:190px 1fr;gap:7px 14px;margin:0}"
+            "dt{color:var(--muted);font-size:13px}dd{margin:0}"
+            ".tabel .naam{font-family:var(--mono);color:var(--accent-d);font-weight:600}"
+            ".grijs{color:var(--muted2)}"
+            "footer{padding:0 26px 34px;color:var(--muted2);font-size:13px}"
+            "</style></head><body>"
+            "<header class=\"kop\"><div class=\"merk\">"
+            "<span class=\"logo\"><img src=\"/logo.png\" alt=\"Werdens Media\" "
+            "onerror=\"this.style.display='none'\"></span>"
+            "<div><div class=\"naam\">Werdens Media LLM</div>"
+            "<div class=\"sub\">Werdens Media · engine</div></div></div>"
+            f"<div class=\"kop-rechts\">poort {PORT} · Ollama- en OpenAI-API</div>"
+            "</header><main>"
+            "<div class=\"kaart\"><div class=\"kaart-kop\"><h2>Status</h2></div>"
+            "<div class=\"kaart-body\"><dl>"
             f"<dt>Versie</dt><dd>{VERSION}</dd>"
             "<dt>Toestand</dt><dd class=\"ok\">in bedrijf</dd>"
             f"<dt>Engine</dt><dd><code>{ENGINE}</code></dd>"
@@ -1006,23 +1044,26 @@ class Handler(BaseHTTPRequestHandler):
             f"<dt>Rekenkracht</dt><dd>{THREADS} threads</dd>"
             f"<dt>GPU</dt><dd>{gpu_tekst}</dd>"
             f"<dt>Aanbevolen model</dt><dd>{aanb_tekst}</dd>"
-            "</dl></div>"
-            "<div class=\"kaart\"><h2>Modellen in huis</h2><table>"
+            "</dl></div></div>"
+            "<div class=\"kaart\"><div class=\"kaart-kop\"><h2>Modellen in huis</h2></div>"
+            "<div class=\"kaart-body\"><table class=\"tabel\">"
             f"{kop}"
-            f"{rijen}</table></div>"
-            "<div class=\"kaart\"><h2>Endpoints</h2><dl>"
+            f"{rijen}</table></div></div>"
+            "<div class=\"kaart\"><div class=\"kaart-kop\"><h2>Endpoints</h2></div>"
+            "<div class=\"kaart-body\"><dl>"
             "<dt>Ollama-vorm</dt><dd><code>/api/tags</code> <code>/api/chat</code> "
             "<code>/api/generate</code> <code>/api/show</code> <code>/api/pull</code> "
             "<code>/api/embed</code></dd>"
             "<dt>OpenAI-vorm</dt><dd><code>/v1/models</code> "
             "<code>/v1/chat/completions</code> <code>/v1/embeddings</code></dd>"
             "<dt>Status</dt><dd><code>/health</code> (JSON)</dd>"
-            "</dl></div>"
-            "<div class=\"kaart\"><h2>De drie lagen</h2><dl>"
+            "</dl></div></div>"
+            "<div class=\"kaart\"><div class=\"kaart-kop\"><h2>De drie lagen</h2></div>"
+            "<div class=\"kaart-body\"><dl>"
             f"<dt>Engine</dt><dd>deze pagina — poort {PORT}</dd>"
             "<dt>Werkruimte</dt><dd>documenten met bronvermelding — poort 8090</dd>"
             "<dt>Media</dt><dd>spraak naar tekst en spraak uit — poort 8091</dd>"
-            "</dl></div>"
+            "</dl></div></div>"
             "</main><footer>Werdens Media LLM · eigen code, alle rechten voorbehouden · "
             "gebruikte onderdelen van derden houden hun eigen licentie</footer>"
             "</body></html>"

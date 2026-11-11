@@ -1,23 +1,17 @@
-<p align="center">
-  <img src="assets/werdens-media-logo.png" alt="Werdens Media" width="110">
-</p>
+# Werdens Media LLM
 
-<p align="center">
-  <img src="docs/banner.svg" alt="Werdens Media LLM" width="820">
-</p>
+Eigen LLM-stack voor Werdens Media: één engine met dezelfde API als Ollama én de
+OpenAI-API, werkruimtes met je eigen documenten en bronvermelding, en spraak naar
+tekst en spraak uit. Alles op je eigen hardware, zonder abonnement en zonder
+tokenkosten — met een Nederlandse interface in de huisstijl van Werdens Media.
 
-<p align="center">
-  <b>Werdens Media LLM</b> — je eigen LLM-stack op je eigen server.<br>
-  Draait volledig lokaal, praat Ollama én OpenAI, en koppelt aan Hermes en je eigen apps.
-</p>
+![Werdens Media LLM — een antwoord uit je eigen documenten, met de bronnen eronder](docs/img/laag-2-antwoord.png)
 
-<p align="center">
-  <img src="https://img.shields.io/badge/licentie-alle%20rechten%20voorbehouden-lightgrey" alt="Licentie">
-  <img src="https://img.shields.io/badge/platform-Proxmox%20%7C%20Debian%20%7C%20Linux-informational" alt="Platform">
-  <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python">
-  <img src="https://img.shields.io/badge/engine-llama.cpp-orange" alt="Engine">
-  <img src="https://img.shields.io/badge/API-Ollama%20%2B%20OpenAI-success" alt="API">
-</p>
+[![Platform](https://img.shields.io/badge/platform-Proxmox%20%7C%20Debian%20%7C%20Linux-2ea3f2)](#installeren-op-proxmox)
+[![Python](https://img.shields.io/badge/python-3.11%2B-1e73be?logo=python&logoColor=white)](https://www.python.org/)
+[![Engine](https://img.shields.io/badge/engine-llama.cpp-5ff0e8)](https://github.com/ggml-org/llama.cpp)
+[![API](https://img.shields.io/badge/API-Ollama%20%2B%20OpenAI-2ea3f2)](#api)
+[![Licentie](https://img.shields.io/badge/licentie-alle%20rechten%20voorbehouden-55657f)](README.md#licentie)
 
 ---
 
@@ -38,8 +32,9 @@ van twee, geen licentie die meereist, en alles wat erin zit is van jou.
 
 Alle drie de lagen hebben een eigen webpagina. Hieronder echte opnamen van de
 draaiende stack — op een CPU zonder GPU, met 4 vCPU en 7,6 GB geheugen.
-De pagina's staan in de huisstijl van Werdens Media (navy met blauw en mint) en
-dragen linksboven het logo.
+De pagina's staan in de huisstijl van **Werdens Monitor**: licht, kaarten op wit,
+blauw `#2ea3f2` als accent en de merk-gradient (cyaan → blauw) op de knoppen, met
+het logo linksboven naast de naam.
 
 **De engine** (poort 11434) — status, modellen in huis en de endpoints:
 

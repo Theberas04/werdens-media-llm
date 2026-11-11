@@ -94,6 +94,66 @@ def logo_bytes() -> bytes:
     except OSError:
         return LEGE_PNG
 
+
+# Huisstijl van Werdens Monitor, letterlijk dezelfde tokens: licht, kaarten op wit,
+# blauw #2ea3f2 als accent en de merk-gradient (cyaan -> blauw) voor de hoofdknoppen.
+HUISSTIJL = """
+:root{
+  --bg:#f4f7fb; --pane:#ffffff; --pane2:#f7fafd; --pane3:#eef3fa;
+  --line:#e3eaf4; --line2:#cfdaeb;
+  --txt:#0f172a; --muted:#55657f; --muted2:#8296ae;
+  --accent:#2ea3f2; --accent-d:#1e73be; --accent-soft:#e8f4fd;
+  --ok:#059669; --ok-soft:#e6f6ef;
+  --amber:#b45309; --amber-soft:#fdf1e2;
+  --red:#dc2626; --red-soft:#fdeaea;
+  --blue:#1e73be; --blue-soft:#e8f4fd;
+  --merk:linear-gradient(118deg,#5ff0e8 0%,#2ea3f2 55%,#1e73be 100%);
+  --r:16px; --r-klein:10px; --hoogte:40px;
+  --schaduw:0 1px 2px rgba(15,23,42,.05),0 12px 28px -20px rgba(15,23,42,.3);
+  --font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:var(--txt);font:15px/1.5 var(--font);
+  -webkit-font-smoothing:antialiased;
+  background:radial-gradient(1100px 520px at 90% -10%,rgba(95,240,232,.12),transparent 62%),
+             radial-gradient(900px 480px at -8% -4%,rgba(74,76,248,.08),transparent 58%),var(--bg)}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+header.kop{position:sticky;top:0;z-index:30;background:rgba(255,255,255,.88);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
+  padding:12px 26px;display:flex;align-items:center;gap:11px}
+.merk{display:flex;align-items:center;gap:11px;min-width:0}
+.merk .logo{width:44px;height:44px;flex:none}
+.merk .logo img{width:100%;height:100%;object-fit:contain;display:block}
+.merk .naam{font-weight:700;font-size:17px;letter-spacing:-.025em;white-space:nowrap}
+.merk .sub{font-size:11.5px;color:var(--muted2);letter-spacing:.08em;text-transform:uppercase;
+  white-space:nowrap}
+.kop-rechts{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;
+  color:var(--muted2);flex:none}
+.kaart{background:var(--pane);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--schaduw)}
+.kaart-kop{background:var(--pane2);border-bottom:1px solid var(--line);
+  border-radius:var(--r) var(--r) 0 0;padding:14px 18px 12px}
+.kaart-kop h2{margin:0;font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);font-weight:700}
+.kaart-body{padding:16px 18px}
+.knop{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:var(--hoogte);
+  padding:0 14px;border-radius:var(--r-klein);background:var(--pane);border:1px solid var(--line2);
+  color:var(--txt);font:inherit;font-weight:600;cursor:pointer}
+.knop:hover{background:var(--pane2);border-color:#b6c7dd}
+.knop.primair{background:var(--merk);border-color:transparent;color:#fff;font-weight:700}
+input,select,textarea{font:inherit;color:var(--txt);background:var(--pane);border:1px solid var(--line2);
+  border-radius:var(--r-klein);padding:0 12px;height:var(--hoogte);width:100%}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+textarea{height:auto;padding:10px 12px;resize:vertical}
+code{font-family:var(--mono);font-size:12.5px;background:var(--pane3);border:1px solid var(--line);
+  border-radius:6px;padding:1px 6px}
+.tabel{width:100%;border-collapse:collapse;font-size:14px}
+.tabel th{text-align:left;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted2);font-weight:700;padding:0 10px 8px 0}
+.tabel td{padding:9px 10px 9px 0;border-top:1px solid var(--line)}
+.ok{color:var(--ok)}
+"""
+
 DATA.mkdir(parents=True, exist_ok=True)
 _db_lock = threading.Lock()
 
@@ -579,75 +639,59 @@ PAGINA = """<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Werdens Media LLM</title>
 <style>
-  /* Huisstijl Werdens Media: navy basis met blauw #2ea3f2 en mint #2ee6a8. */
-  :root{--bg:#0e151d;--pane:#0f172a;--line:#1e2f45;--txt:#f4f7fb;--dim:#b6c7dd;
-        --blauw:#2ea3f2;--mint:#2ee6a8;--licht:#c9d8fb;
-        --teal:var(--mint);--sky:var(--blauw);--vio:var(--licht)}
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--txt);
-       font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
-  header{padding:22px 28px 16px;border-bottom:1px solid var(--line);
-         background:linear-gradient(180deg,#132133,#0e151d)}
-  .kop{display:flex;align-items:center;gap:16px}
-  .kop img{height:46px;width:auto;display:block;flex:0 0 auto}
-  h1{margin:0;font-size:26px;letter-spacing:-.4px}
-  h1 span{background:linear-gradient(90deg,var(--teal),var(--sky),var(--vio));
-          -webkit-background-clip:text;background-clip:text;color:transparent}
-  .sub{color:var(--dim);font-size:13px;margin-top:4px}
-  main{display:grid;grid-template-columns:280px 1fr;gap:0;min-height:calc(100vh - 84px)}
-  aside{border-right:1px solid var(--line);padding:18px;overflow:auto}
+  /* Huisstijl Werdens Monitor: licht, kaarten op wit, blauw als accent. */
+  __HUISSTIJL__
+  main{display:grid;grid-template-columns:290px 1fr;gap:0;align-items:start;
+       min-height:calc(100vh - 69px)}
+  aside{border-right:1px solid var(--line);padding:16px;overflow:auto;align-self:stretch}
   section{padding:18px 22px;overflow:auto}
-  .pane{background:var(--pane);border:1px solid var(--line);border-radius:12px;
-        padding:14px;margin-bottom:14px}
-  label{display:block;font-size:12px;color:var(--dim);margin:8px 0 4px;text-transform:uppercase;
-        letter-spacing:.06em}
-  input,textarea,select,button{font:inherit;color:var(--txt);background:#0b1220;
-        border:1px solid var(--line);border-radius:9px;padding:9px 11px;width:100%}
+  .pane{background:var(--pane);border:1px solid var(--line);border-radius:var(--r);
+        box-shadow:var(--schaduw);padding:14px;margin-bottom:14px}
+  label{display:block;font-size:11.5px;color:var(--muted2);margin:10px 0 5px;
+        text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+  input,textarea,select,button{font:inherit;color:var(--txt);background:var(--pane);
+        border:1px solid var(--line2);border-radius:var(--r-klein);padding:9px 11px;width:100%}
   textarea{min-height:110px;resize:vertical}
-  button{cursor:pointer;background:linear-gradient(90deg,#1e73be,#2ea3f2);border:0;
-         font-weight:600;margin-top:10px}
-  button:hover{filter:brightness(1.12)}
-  button.ghost{background:#111c34;border:1px solid var(--line);font-weight:500}
-  .ws{padding:9px 11px;border:1px solid var(--line);border-radius:9px;margin-bottom:7px;
-      cursor:pointer;background:#0b1220;font-size:14px}
-  .ws.actief{border-color:var(--teal);box-shadow:0 0 0 1px #14b8a655 inset}
-  .ws small{display:block;color:var(--dim);font-size:11px}
-  .msg{max-width:760px;margin:0 0 14px;padding:12px 14px;border-radius:12px;
-       border:1px solid var(--line);white-space:pre-wrap}
-  .msg.user{background:#101c36;margin-left:auto}
+  button{cursor:pointer;background:var(--merk);border:0;color:#fff;font-weight:700;margin-top:10px;
+         border-radius:var(--r-klein);padding:10px 11px}
+  button:hover{filter:brightness(1.03)}
+  button.ghost{background:var(--pane);border:1px solid var(--line2);color:var(--txt);font-weight:600}
+  .ws{padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-klein);margin-bottom:7px;
+      cursor:pointer;background:var(--pane);font-size:14px}
+  .ws.actief{border-color:var(--accent);background:var(--accent-soft);
+             box-shadow:0 0 0 3px rgba(46,163,242,.12)}
+  .ws small{display:block;color:var(--muted2);font-size:11px}
+  .msg{max-width:760px;margin:0 0 14px;padding:12px 14px;border-radius:var(--r);
+       border:1px solid var(--line);white-space:normal;box-shadow:var(--schaduw)}
+  .msg.user{background:var(--accent-soft);border-color:#cfe6fa;margin-left:auto}
   .msg.bot{background:var(--pane)}
-  .bronnen{margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;font-size:13px;color:var(--dim)}
-  .bron{background:#0b1220;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:6px}
-  .bron b{color:var(--sky)}
+  .bronnen{margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;font-size:13px;
+           color:var(--muted)}
+  .bron{background:var(--pane2);border:1px solid var(--line);border-radius:var(--r-klein);
+        padding:8px 10px;margin-top:6px}
+  .bron b{color:var(--accent-d)}
   .rij{display:flex;gap:10px}.rij>*{flex:1}
-  .status{font-size:12px;color:var(--dim)}
-  .ok{color:var(--teal)}.fout{color:#fca5a5}
+  .status{font-size:12px;color:var(--muted2)}
+  .ok{color:var(--ok)}.fout{color:var(--red)}
   /* Antwoorden zijn markdown: laat koppen, lijsten, code en vet zien. */
-  .msg{white-space:normal}
   .msg p{margin:0 0 9px}
   .msg p:last-child{margin-bottom:0}
   .msg ul,.msg ol{margin:6px 0 9px 20px;padding:0}
   .msg li{margin:3px 0}
-  .msg pre{background:#0b1220;border:1px solid var(--line);border-radius:8px;padding:10px;
-           margin:8px 0;overflow:auto;font-size:13px;line-height:1.45;white-space:pre-wrap}
-  .msg code{background:#0b1220;border:1px solid var(--line);border-radius:5px;
-            padding:1px 5px;font-size:13px}
+  .msg pre{background:var(--pane3);border:1px solid var(--line);border-radius:var(--r-klein);
+           padding:10px;margin:8px 0;overflow:auto;font-size:13px;line-height:1.45;white-space:pre-wrap}
   .msg pre code{background:none;border:0;padding:0}
-  .msg a{color:var(--sky)}
-  .fragment{font-size:13px;color:var(--dim);white-space:normal;max-height:150px;overflow:hidden}
+  .fragment{font-size:13px;color:var(--muted);white-space:normal;max-height:150px;overflow:hidden}
   .fragment p{margin:0 0 5px}
   .fragment pre{max-height:80px}
-  code{background:#0b1220;border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:12px}
 </style></head><body>
-<header>
-  <div class="kop">
-    <img src="/logo.png" alt="Werdens Media" onerror="this.style.display='none'">
-    <div>
-      <h1>Werdens <span>Media LLM</span></h1>
-      <div class="sub">Werkruimtes met je eigen documenten · antwoorden met bronvermelding · alles lokaal
-        <span id="engine" class="status"></span></div>
-    </div>
+<header class="kop">
+  <div class="merk">
+    <span class="logo"><img src="/logo.png" alt="Werdens Media" onerror="this.style.display='none'"></span>
+    <div><div class="naam">Werdens Media LLM</div>
+      <div class="sub">Werdens Media · werkruimtes</div></div>
   </div>
+  <div class="kop-rechts"><span id="engine" class="status"></span></div>
 </header>
 <main>
   <aside>
@@ -824,11 +868,11 @@ async function stelVraag(){
 WIDGET = """/* Werdens Media LLM — embed-widget
    Zet dit op je site:
    <script src="http://<server>:8090/widget.js"
-           data-werkruimte="mijn-project" data-kleur="#2ee6a8"></script> */
+           data-werkruimte="mijn-project" data-kleur="#2ea3f2"></script> */
 (function () {
   var s = document.currentScript;
   var ws = (s && s.dataset.werkruimte) || 'standaard';
-  var kleur = (s && s.dataset.kleur) || '#2ee6a8';
+  var kleur = (s && s.dataset.kleur) || '#2ea3f2';
   var basis = new URL(s.src).origin;
   var knop = document.createElement('button');
   knop.textContent = 'Vraag het de assistent';
@@ -837,8 +881,8 @@ WIDGET = """/* Werdens Media LLM — embed-widget
     + 'background:' + kleur;
   var kader = document.createElement('iframe');
   kader.style.cssText = 'position:fixed;right:20px;bottom:80px;width:380px;height:560px;'
-    + 'max-width:92vw;max-height:80vh;border:1px solid #1e2f45;border-radius:14px;'
-    + 'z-index:99999;display:none;box-shadow:0 20px 50px rgba(0,0,0,.45);background:#0e151d';
+    + 'max-width:92vw;max-height:80vh;border:1px solid #e3eaf4;border-radius:16px;'
+    + 'z-index:99999;display:none;box-shadow:0 18px 40px -24px rgba(15,23,42,.5);background:#f4f7fb';
   kader.src = basis + '/embed?werkruimte=' + encodeURIComponent(ws);
   knop.onclick = function () {
     kader.style.display = kader.style.display === 'none' ? 'block' : 'none';
@@ -851,19 +895,23 @@ WIDGET = """/* Werdens Media LLM — embed-widget
 EMBED_PAGINA = """<!doctype html><html lang="nl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Werdens Media LLM</title><style>
- body{margin:0;background:#0e151d;color:#f4f7fb;font:14px/1.5 system-ui,sans-serif}
- header{padding:12px 14px;border-bottom:1px solid #1e2f45;font-weight:700}
- header span{color:#2ee6a8}
- #gesprek{padding:12px;height:calc(100% - 130px);overflow:auto}
- .msg{padding:9px 11px;border-radius:10px;margin-bottom:9px;white-space:pre-wrap;background:#0f172a}
- .msg.user{background:#101c36}
- .bron{font-size:12px;color:#b6c7dd;margin-top:6px;border-top:1px dashed #1e2f45;padding-top:5px}
- .logo{height:22px;width:auto;vertical-align:-5px;margin-right:8px}
- .balk{padding:10px 12px;border-top:1px solid #1e2f45;display:flex;gap:8px}
- input{flex:1;background:#0b1220;border:1px solid #1e2f45;border-radius:9px;color:#f4f7fb;padding:9px}
- button{background:linear-gradient(90deg,#1e73be,#2ea3f2);border:0;color:#f4f7fb;border-radius:9px;padding:9px 14px;font-weight:600}
+ __HUISSTIJL__
+ body{font-size:14px}
+ header.kop{padding:10px 12px;gap:9px}
+ .logo{width:28px;height:28px;flex:none}
+ .logo img{width:100%;height:100%;object-fit:contain;display:block}
+ .naam{font-weight:700;font-size:14px;letter-spacing:-.02em}
+ #gesprek{padding:12px;height:calc(100% - 118px);overflow:auto}
+ .msg{padding:9px 11px;border-radius:var(--r-klein);margin-bottom:9px;white-space:normal;
+      background:var(--pane);border:1px solid var(--line);box-shadow:none}
+ .msg.user{background:var(--accent-soft);border-color:#cfe6fa}
+ .bron{font-size:12px;color:var(--muted);margin-top:6px;border-top:1px dashed var(--line);padding-top:5px}
+ .balk{padding:10px 12px;border-top:1px solid var(--line);display:flex;gap:8px;background:var(--pane)}
+ .balk input{flex:1;height:36px}
+ .balk button{background:var(--merk);border:0;color:#fff;border-radius:var(--r-klein);
+   padding:0 14px;height:36px;font-weight:700}
 </style></head><body>
-<header><img class="logo" src="/logo.png" alt="" onerror="this.style.display='none'">Werdens <span>Media LLM</span></header>
+<header class="kop"><span class="logo"><img src="/logo.png" alt="Werdens Media" onerror="this.style.display='none'"></span><span class="naam">Werdens Media LLM</span></header>
 <div id="gesprek"></div>
 <div class="balk"><input id="v" placeholder="Stel je vraag…" onkeydown="if(event.key==='Enter')vraag()">
 <button onclick="vraag()">Vraag</button></div>
@@ -953,13 +1001,15 @@ class Handler(BaseHTTPRequestHandler):
             if pad == "/logo.png":
                 return self._stuur(logo_bytes(), 200, "image/png")
             if pad in ("/", "/index.html"):
-                return self._html(PAGINA)
+                # PAGINA is geen f-string (de JS zit vol accolades), dus de huisstijl
+                # komt er via een plaatshouder in.
+                return self._html(PAGINA.replace("__HUISSTIJL__", HUISSTIJL))
             if pad == "/health":
                 return self._json({"status": "ok", "versie": VERSIE, "engine": engine_online()})
             if pad == "/widget.js":
                 return self._stuur(WIDGET.encode(), 200, "application/javascript; charset=utf-8")
             if pad == "/embed":
-                return self._html(EMBED_PAGINA)
+                return self._html(EMBED_PAGINA.replace("__HUISSTIJL__", HUISSTIJL))
             if pad == "/api/workspaces":
                 return self._json({"workspaces": werkruimtes()})
             delen = self._delen()
