@@ -865,6 +865,119 @@ class Handler(BaseHTTPRequestHandler):
     def _err(self, msg: str, code: int = 400):
         self._json({"error": msg}, code)
 
+    def _html(self, tekst: str, code: int = 200):
+        body = tekst.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _status_pagina(self) -> str:
+        """Mensvriendelijke statuspagina. Een browser vraagt HTML; een client die
+        de API aanspreekt krijgt gewoon JSON op dezelfde plek."""
+        aanb = aanbevolen_model() or {}
+
+        # Let op: STORE.list_models() berekent een sha256 over elk model (ettelijke
+        # GB's) als het manifest nog niet bestaat. Een statuspagina mag dat nooit
+        # triggeren, dus hier alleen de bestandsgrootte en een gecachete digest.
+        rijen = ""
+        heeft_digest = False
+        for p in sorted(MODELS_DIR.glob("*.gguf")):
+            mf = STORE.manifest(p.stem)
+            dig = str(mf.get("digest") or "")
+            heeft_digest = heeft_digest or bool(dig)
+            rijen += (
+                f'<tr><td class="naam">{p.stem}</td>'
+                f'<td class="grijs">{p.stat().st_size / 1024 / 1024:,.0f} MB</td>'
+                f'<td class="grijs">{STORE.quant_from_name(p.stem)}</td>'
+                f'<td class="grijs">{dig[:12] if dig else "—"}</td></tr>'
+            )
+        if rijen and not heeft_digest:
+            # Zonder gecachete digest is de kolom alleen streepjes; laat hem dan weg.
+            rijen = rijen.replace('<td class="grijs">—</td>', '')
+            kop = "<tr><th>Model</th><th>Grootte</th><th>Quantisatie</th></tr>"
+        else:
+            kop = "<tr><th>Model</th><th>Grootte</th><th>Quantisatie</th><th>Digest</th></tr>"
+        rijen = rijen or '<tr><td colspan="4" class="grijs">nog geen modellen — haal er een met <code>wllm.py pull hf:&lt;repo&gt;/&lt;bestand&gt;.gguf</code></td></tr>'
+        gpu_tekst = (
+            f'{GPU.get("naam") or "aanwezig"} · {NGL} lagen op de GPU'
+            if GPU.get("aanwezig")
+            else "geen GPU gevonden — alles rekent op de CPU"
+        )
+        aanb_tekst = (
+            f'{aanb.get("bestand", "?")} — {aanb.get("opmerking", "")}'
+            if aanb
+            else "nog niet te bepalen"
+        )
+        return (
+            "<!doctype html><html lang=\"nl\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            f"<title>Werdens Media LLM — engine {VERSION}</title><style>"
+            ":root{--bg:#0b1020;--pane:#0f172e;--line:#243049;--txt:#e2e8f0;--dim:#94a3b8;"
+            "--teal:#5eead4;--sky:#7dd3fc}"
+            "*{box-sizing:border-box}"
+            "body{margin:0;background:var(--bg);color:var(--txt);"
+            "font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}"
+            "header{padding:26px 32px 18px;border-bottom:1px solid var(--line)}"
+            "h1{margin:0 0 6px;font-size:26px;letter-spacing:-.3px}"
+            "h1 span{color:var(--teal)}"
+            ".sub{color:var(--dim);font-size:13px}"
+            "main{padding:22px 32px 40px;display:grid;gap:18px;max-width:1180px}"
+            ".kaart{background:var(--pane);border:1px solid var(--line);border-radius:14px;padding:16px 18px}"
+            ".kaart h2{margin:0 0 12px;font-size:13px;text-transform:uppercase;"
+            "letter-spacing:.9px;color:var(--dim);font-weight:600}"
+            "dl{display:grid;grid-template-columns:180px 1fr;gap:6px 14px;margin:0}"
+            "dt{color:var(--dim);font-size:13px}dd{margin:0}"
+            "table{width:100%;border-collapse:collapse;font-size:14px}"
+            "th{text-align:left;color:var(--dim);font-weight:600;font-size:12px;"
+            "text-transform:uppercase;letter-spacing:.6px;padding-bottom:8px}"
+            "td{padding:7px 0;border-top:1px solid var(--line)}"
+            ".naam{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--teal)}"
+            ".grijs{color:var(--dim)}"
+            "code{background:#0b1220;border:1px solid var(--line);border-radius:5px;"
+            "padding:1px 6px;font-size:13px}"
+            "a{color:var(--sky)}"
+            ".ok{color:var(--teal)}"
+            "footer{padding:0 32px 32px;color:var(--dim);font-size:13px}"
+            "</style></head><body><header>"
+            f"<h1>Werdens <span>Media LLM</span> — engine</h1>"
+            "<div class=\"sub\">Eigen LLM-server met de Ollama-API én de OpenAI-API op dezelfde "
+            f"poort. Alles lokaal, zonder abonnement en zonder tokenkosten.</div></header><main>"
+            "<div class=\"kaart\"><h2>Status</h2><dl>"
+            f"<dt>Versie</dt><dd>{VERSION}</dd>"
+            "<dt>Toestand</dt><dd class=\"ok\">in bedrijf</dd>"
+            f"<dt>Engine</dt><dd><code>{ENGINE}</code></dd>"
+            f"<dt>Contextvenster</dt><dd>{CTX:,} tokens</dd>"
+            f"<dt>KV-cache</dt><dd>{KV_TYPE}</dd>"
+            f"<dt>Rekenkracht</dt><dd>{THREADS} threads</dd>"
+            f"<dt>GPU</dt><dd>{gpu_tekst}</dd>"
+            f"<dt>Aanbevolen model</dt><dd>{aanb_tekst}</dd>"
+            "</dl></div>"
+            "<div class=\"kaart\"><h2>Modellen in huis</h2><table>"
+            f"{kop}"
+            f"{rijen}</table></div>"
+            "<div class=\"kaart\"><h2>Endpoints</h2><dl>"
+            "<dt>Ollama-vorm</dt><dd><code>/api/tags</code> <code>/api/chat</code> "
+            "<code>/api/generate</code> <code>/api/show</code> <code>/api/pull</code> "
+            "<code>/api/embed</code></dd>"
+            "<dt>OpenAI-vorm</dt><dd><code>/v1/models</code> "
+            "<code>/v1/chat/completions</code> <code>/v1/embeddings</code></dd>"
+            "<dt>Status</dt><dd><code>/health</code> (JSON)</dd>"
+            "</dl></div>"
+            "<div class=\"kaart\"><h2>De drie lagen</h2><dl>"
+            f"<dt>Engine</dt><dd>deze pagina — poort {PORT}</dd>"
+            "<dt>Werkruimte</dt><dd>documenten met bronvermelding — poort 8090</dd>"
+            "<dt>Media</dt><dd>spraak naar tekst en spraak uit — poort 8091</dd>"
+            "</dl></div>"
+            "</main><footer>Werdens Media LLM · eigen code, alle rechten voorbehouden · "
+            "gebruikte onderdelen van derden houden hun eigen licentie</footer>"
+            "</body></html>"
+        )
+
     def _body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
         if not n:
@@ -919,6 +1032,8 @@ class Handler(BaseHTTPRequestHandler):
                     ],
                 }
             )
+        if path == "/" and "text/html" in (self.headers.get("Accept") or ""):
+            return self._html(self._status_pagina())
         if path in ("/", "/health"):
             return self._json(
                 {

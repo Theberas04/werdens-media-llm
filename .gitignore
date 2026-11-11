@@ -9,6 +9,10 @@ media/bin/
 media/voices/
 media/tmp/
 
+# opnamebeelden van de demo; alleen de video en de schermafbeeldingen horen erin
+docs/opname/
+docs/*/frames.txt
+
 # gegevens en logs
 data/
 logs/

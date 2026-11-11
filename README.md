@@ -24,11 +24,41 @@ Eén stack, drie lagen, alles op je eigen hardware:
 | Laag | Wat het doet | Status |
 |---|---|---|
 | **1. Engine** | Eigen LLM-server met dezelfde API als Ollama plus de OpenAI-API. Beheert modellen, start en stopt de rekenkracht-engine, houdt modellen warm. | **werkt en is getest** |
-| **2. Werkruimte** | Werkruimtes per project, documenten erin met bronvermelding, vectordatabase, model-routing, embed-widget voor je eigen sites. | in aanbouw |
-| **3. Media** | Spraak naar tekst (Whisper), spraak uit (Piper, Nederlandse stemmen), beeld (ComfyUI/SDXL) en video. | in aanbouw |
+| **2. Werkruimte** | Werkruimtes per project, documenten erin met bronvermelding, vectordatabase op SQLite, gesprekken, API-sleutels, embed-widget voor je eigen sites. | **werkt en is getest** |
+| **3. Media** | Spraak naar tekst (Whisper), spraak uit (Piper, Nederlandse stemmen). Beeld (ComfyUI/SDXL) en video staan nog open. | **spraak werkt** |
 
 Waarom eigen code in plaats van een bestaande app forken: één techniek in plaats
 van twee, geen licentie die meereist, en alles wat erin zit is van jou.
+
+## Zo ziet het eruit
+
+Alle drie de lagen hebben een eigen webpagina. Hieronder echte opnamen van de
+draaiende stack — op een CPU zonder GPU, met 4 vCPU en 7,6 GB geheugen.
+
+**De engine** (poort 11434) — status, modellen in huis en de endpoints:
+
+![De engine-statuspagina](docs/img/laag-1-engine.png)
+
+**De werkruimte** (poort 8090) — een vraag stellen over je eigen documenten:
+
+![De werkruimtelaag](docs/img/laag-2-werkruimte.png)
+
+En het antwoord, met de bronnen eronder en de score per bron:
+
+![Antwoord met bronvermelding](docs/img/laag-2-antwoord.png)
+
+**De medialaag** (poort 8091) — spraak naar tekst en spraak uit met een
+Nederlandse stem:
+
+![De medialaag](docs/img/laag-3-media.png)
+
+**Een rondleiding in beeld** (echte opname, inclusief de wachttijd op een
+antwoord — op een CPU duurt dat ongeveer anderhalve minuut):
+
+[![Bekijk de rondleiding](docs/img/laag-2-antwoord.png)](docs/demo.mp4)
+
+De opnamen zijn gemaakt met `scripts/screenshots.js` en `scripts/record-demo.js`,
+zodat je ze na een wijziging zelf opnieuw kunt maken.
 
 ## Snel starten (op een Debian-machine)
 
@@ -47,7 +77,7 @@ cd .. && python3 engine/wllm.py serve      # luistert op :11434
 Op de **Proxmox-host**, als root:
 
 ```bash
-# de hele stack in één unprivileged LXC (Debian 13, 4 cores, 8 GB, 40 GB schijf)
+# de hele stack in één unprivileged LXC (Debian 13, 4 cores, 12 GB, 60 GB schijf)
 bash deploy/proxmox/create-werdens-media-llm-lxc.sh
 ```
 

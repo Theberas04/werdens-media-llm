@@ -591,6 +591,21 @@ PAGINA = """<!doctype html>
   .rij{display:flex;gap:10px}.rij>*{flex:1}
   .status{font-size:12px;color:var(--dim)}
   .ok{color:var(--teal)}.fout{color:#fca5a5}
+  /* Antwoorden zijn markdown: laat koppen, lijsten, code en vet zien. */
+  .msg{white-space:normal}
+  .msg p{margin:0 0 9px}
+  .msg p:last-child{margin-bottom:0}
+  .msg ul,.msg ol{margin:6px 0 9px 20px;padding:0}
+  .msg li{margin:3px 0}
+  .msg pre{background:#0b1220;border:1px solid var(--line);border-radius:8px;padding:10px;
+           margin:8px 0;overflow:auto;font-size:13px;line-height:1.45;white-space:pre-wrap}
+  .msg code{background:#0b1220;border:1px solid var(--line);border-radius:5px;
+            padding:1px 5px;font-size:13px}
+  .msg pre code{background:none;border:0;padding:0}
+  .msg a{color:var(--sky)}
+  .fragment{font-size:13px;color:var(--dim);white-space:normal;max-height:150px;overflow:hidden}
+  .fragment p{margin:0 0 5px}
+  .fragment pre{max-height:80px}
   code{background:#0b1220;border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:12px}
 </style></head><body>
 <header>
@@ -702,16 +717,44 @@ async function voegBestand(){
   }catch(e){ meld(e.message); }
 }
 function meld(t){ $('dokstatus').innerHTML = `<span class="fout">${t}</span>`; }
+function md(s){
+  const NL = String.fromCharCode(10);
+  const esc = String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const delen = esc.split('```');
+  let uit = '';
+  delen.forEach((deel,i) => {
+    if(i % 2 === 1){
+      uit += '<pre>' + deel.replace(new RegExp('^[a-zA-Z0-9+#-]*' + NL),'').replace(new RegExp(NL + '$'),'') + '</pre>';
+      return;
+    }
+    let t = deel
+      .replace(/^#### (.*)$/gm,'<b>$1</b>')
+      .replace(/^### (.*)$/gm,'<b>$1</b>')
+      .replace(/^## (.*)$/gm,'<b>$1</b>')
+      .replace(/^# (.*)$/gm,'<b>$1</b>')
+      .replace(new RegExp('[*][*]([^*' + NL + ']+)[*][*]','g'),'<b>$1</b>')
+      .replace(new RegExp('(^|[ (])[*]([^*' + NL + ']+)[*]','g'),'$1<i>$2</i>')
+      .replace(new RegExp('`([^`' + NL + ']+)`','g'),'<code>$1</code>');
+    const lijst = (soort) => (m, blok) => NL + '<' + soort + '>' + blok.trim().split(NL)
+      .map(r => '<li>' + r.replace(soort === 'ul' ? /^[-*] / : /^[0-9]+[.] /,'') + '</li>').join('') + '</' + soort + '>';
+    t = t.replace(new RegExp('(?:^|' + NL + ')((?:[-*] .*(?:' + NL + '|$))+)','g'), lijst('ul'));
+    t = t.replace(new RegExp('(?:^|' + NL + ')((?:[0-9]+[.] .*(?:' + NL + '|$))+)','g'), lijst('ol'));
+    t = t.replace(new RegExp(NL + '{2,}','g'),'</p><p>').replace(new RegExp(NL,'g'),'<br>');
+    uit += '<p>' + t + '</p>';
+  });
+  return uit;
+}
+
 function toon(rol, tekst, bronnen){
   const div = document.createElement('div');
   div.className = 'msg ' + rol;
-  div.textContent = tekst;
+  div.innerHTML = md(tekst);
   if(bronnen && bronnen.length){
     const b = document.createElement('div'); b.className='bronnen';
     b.innerHTML = '<b>Bronnen</b>' + bronnen.map((x,i) =>
       `<div class="bron">[${i+1}] <b>${x.titel}</b>${x.bron?' · '+x.bron:''}
        <div class="status">score ${x.score}</div>
-       <div>${x.tekst.slice(0,300)}${x.tekst.length>300?'…':''}</div></div>`).join('');
+       <div class="fragment">${md(x.tekst.slice(0,300))}${x.tekst.length>300?'…':''}</div></div>`).join('');
     div.appendChild(b);
   }
   $('gesprek').appendChild(div);
