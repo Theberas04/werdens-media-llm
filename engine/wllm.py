@@ -32,8 +32,10 @@ import hashlib
 import json
 import os
 import re
+import select
 import signal
 import shutil
+import socket
 import subprocess
 import struct
 import sys
@@ -951,7 +953,39 @@ def engine_stream(eng: Engine, payload: dict):
         eng.last_used = time.time()
 
 
-def engine_once(eng: Engine, payload: dict) -> dict:
+def _klant_weg(verbinding) -> bool:
+    """Is de vragende partij zijn verbinding kwijt?
+
+    Een gesloten verbinding is 'leesbaar' en levert dan niets op; met MSG_PEEK
+    kijken we dat na zonder iets uit de stroom te halen."""
+    if verbinding is None:
+        return False
+    try:
+        leesbaar, _, _ = select.select([verbinding], [], [], 0)
+        if not leesbaar:
+            return False
+        return verbinding.recv(1, socket.MSG_PEEK) == b""
+    except (OSError, ValueError):
+        return True
+
+
+def _bewaak_klant(verbinding, resp, klaar: threading.Event):
+    """Breek het rekenen af zodra de vragende partij wegvalt.
+
+    Zonder dit blijft een weggevallen verzoek doorrekenen: een agent die zijn
+    geduld verliest of een gesloten tabblad laat de rekenkern minutenlang
+    doorwerken. De kern doet één verzoek tegelijk, dus elke volgende vraag zou
+    moeten wachten tot dat af is -- en dat kan oplopen tot de tijdlimiet."""
+    while not klaar.wait(1.0):
+        if _klant_weg(verbinding):
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+
+def engine_once(eng: Engine, payload: dict, klant=None) -> dict:
     p = dict(payload)
     p["stream"] = False
     eng.busy += 1
@@ -961,8 +995,17 @@ def engine_once(eng: Engine, payload: dict) -> dict:
             data=json.dumps(p).encode(),
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=3600) as resp:
+        resp = urllib.request.urlopen(req, timeout=600)
+        klaar = threading.Event()
+        if klant is not None:
+            threading.Thread(
+                target=_bewaak_klant, args=(klant, resp, klaar), daemon=True
+            ).start()
+        try:
             return json.load(resp)
+        finally:
+            klaar.set()
+            resp.close()
     finally:
         eng.busy -= 1
         eng.last_used = time.time()
@@ -1322,7 +1365,7 @@ class Handler(BaseHTTPRequestHandler):
         stream = payload["stream"]
         t0 = time.time()
         if not stream:
-            r = engine_once(eng, payload)
+            r = engine_once(eng, payload, self.connection)
             eng.touch()
             msg = r["choices"][0]["message"]
             usage = r.get("usage") or {}
@@ -1394,7 +1437,7 @@ class Handler(BaseHTTPRequestHandler):
         stream = payload["stream"]
         t0 = time.time()
         if not stream:
-            r = engine_once(eng, payload)
+            r = engine_once(eng, payload, self.connection)
             eng.touch()
             usage = r.get("usage") or {}
             total = int((time.time() - t0) * 1e9)
@@ -1493,7 +1536,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             return
-        r = engine_once(eng, payload)
+        r = engine_once(eng, payload, self.connection)
         eng.touch()
         r["model"] = eng.model
         r["id"] = "chatcmpl-" + hashlib.sha1(
@@ -1516,7 +1559,7 @@ class Handler(BaseHTTPRequestHandler):
             "max_tokens": b.get("max_tokens") or 512,
             "temperature": b.get("temperature", 0.8),
         }
-        r = engine_once(eng, payload)
+        r = engine_once(eng, payload, self.connection)
         eng.touch()
         txt = r["choices"][0]["message"].get("content") or ""
         return self._json(
