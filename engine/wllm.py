@@ -648,6 +648,21 @@ MODEL_TRAPPEN = (
 # bij passen; op een GPU telt alleen het videogeheugen.
 CPU_OVERHEAD_MB = int(os.environ.get("WLLM_CPU_OVERHEAD_MB", "2000"))
 
+# De standaardsysteemprompt. Zonder afspraken gaat een klein model fantaseren: het
+# verzint een baas achter zich en antwoordt in de verkeerde taal. Clients die hun
+# eigen systeemafspraken meesturen (Hermes doet dat) houden die; deze prompt vult
+# alleen het gat. Leeg maken met WLLM_SYSTEEM="" zet hem uit.
+STANDAARD_SYSTEEM = os.environ.get(
+    "WLLM_SYSTEEM",
+    "Je bent de Werdens Media LLM, een behulpzame AI-assistent die op deze machine "
+    "draait. Antwoord in het Nederlands, in gewone taal, en blijf bij de vraag. "
+    "Weet je iets niet, zeg dat dan eerlijk; verzin geen feiten, bronnen of namen. "
+    "Stel jezelf niet voor als assistent van een ander bedrijf.",
+)
+
+# Nederlands telt ongeveer drie tekens per token.
+TEKENS_PER_TOKEN = 3.0
+
 # Hoe lang mag de rekenkern nog doorwerken nadat de vragende partij is weggevallen?
 # Tijdens het verwerken van een grote prompt merkt llama-server een gesloten
 # verbinding niet, dus hij blijft minutenlang rekenen voor niemand. Met één
@@ -1419,6 +1434,50 @@ def engine_once(eng: Engine, payload: dict, klant=None) -> dict:
 # --------------------------------------------------------------------------- #
 # HTTP-API
 # --------------------------------------------------------------------------- #
+def _tok(tekst: str) -> int:
+    return int(len(tekst or "") / TEKENS_PER_TOKEN) + 1
+
+
+def kort_in(messages: list[dict], ctx: int, max_tokens: int) -> tuple[list[dict], int]:
+    """Laat een gesprek binnen het contextvenster passen.
+
+    Zonder dit antwoordt de rekenkern met 'Context size has been exceeded' en
+    krijgt de gebruiker een fout in plaats van een antwoord -- precies bij de
+    lange gesprekken waarin je het meest hebt gestopt. We bewaren de
+    systeemafspraken en de nieuwste berichten, en zeggen het erbij als er iets
+    wegviel. Geeft (berichten, aantal weggelaten berichten)."""
+    if not messages:
+        return messages, 0
+    ruimte = max(256, int(ctx) - int(max_tokens) - 64)
+    systeem = [m for m in messages if m.get("role") == "system"]
+    rest = [m for m in messages if m.get("role") != "system"]
+    gebruikt = sum(_tok(m.get("content") or "") for m in systeem)
+    gekozen: list[dict] = []
+    for m in reversed(rest):
+        n = _tok(m.get("content") or "")
+        if gebruikt + n <= ruimte:
+            gekozen.insert(0, m)
+            gebruikt += n
+            continue
+        if not gekozen:
+            teksten = str(m.get("content") or "")
+            bewaar = max(200, int((ruimte - gebruikt) * TEKENS_PER_TOKEN))
+            gekozen.insert(0, {**m, "content": "…" + teksten[-bewaar:]})
+            gebruikt += _tok(gekozen[0]["content"])
+        break
+    weggelaten = len(rest) - len(gekozen)
+    uit = list(systeem) + gekozen
+    if weggelaten > 0:
+        uit.append(
+            {
+                "role": "system",
+                "content": f"Er zijn {weggelaten} eerdere berichten weggelaten omdat het "
+                "gesprek te lang werd voor het contextvenster. Ga verder met wat je hier ziet.",
+            }
+        )
+    return uit, weggelaten
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = f"wllm/{VERSION}"
@@ -1819,14 +1878,50 @@ class Handler(BaseHTTPRequestHandler):
                 messages.append({"role": "system", "content": sys_msg})
             messages.append({"role": "user", "content": prompt})
         params = options_to_params(b.get("options") or {})
+        max_tokens = int(b.get("max_tokens") or params.pop("max_tokens", 512) or 512)
+        # Zonder systeemafspraken vult de engine een Nederlandse standaard in; een
+        # client met eigen afspraken (Hermes) merkt hier niets van.
+        if STANDAARD_SYSTEEM and not any(m.get("role") == "system" for m in messages):
+            messages = [{"role": "system", "content": STANDAARD_SYSTEEM}, *messages]
+        messages, weggelaten = kort_in(messages, eng.ctx, max_tokens)
+        if weggelaten:
+            sys.stderr.write(f"[wllm] {weggelaten} bericht(en) weggelaten voor het contextvenster\n")
         payload = {
             "model": eng.model,
             "messages": messages,
             "stream": bool(b.get("stream", True)),
-            "max_tokens": b.get("max_tokens") or params.pop("max_tokens", 512),
+            "max_tokens": max_tokens,
         }
         payload.update({k: v for k, v in params.items() if not k.startswith("_")})
         return eng, messages, payload
+
+    def _bewaak_venster(self, eng: Engine, payload: dict) -> dict:
+        """Zet de standaardsysteemprompt en de inkorting ook op de OpenAI-route.
+
+        Die route bouwt zijn verzoek zelf uit de body en ging daardoor buiten de
+        gewone voorbereiding om: geen systeemafspraken en geen inkorting, waardoor
+        een lang gesprek alsnog op 'Context size exceeded' stukliep -- precies de
+        route die clients als Hermes gebruiken."""
+        msgs = payload.get("messages")
+        mt = int(payload.get("max_tokens") or payload.get("max_completion_tokens") or 512)
+        if msgs:
+            if STANDAARD_SYSTEEM and not any(m.get("role") == "system" for m in msgs):
+                msgs = [{"role": "system", "content": STANDAARD_SYSTEEM}, *msgs]
+            msgs, weggelaten = kort_in(msgs, eng.ctx, mt)
+            if weggelaten:
+                sys.stderr.write(
+                    f"[wllm] {weggelaten} bericht(en) weggelaten voor het contextvenster\n"
+                )
+            payload["messages"] = msgs
+        else:
+            prompt = payload.get("prompt")
+            if isinstance(prompt, str) and prompt:
+                ruimte = max(256, int(eng.ctx) - mt - 64)
+                max_tekens = int(ruimte * TEKENS_PER_TOKEN)
+                if len(prompt) > max_tekens:
+                    payload["prompt"] = "…" + prompt[-max_tekens:]
+                    sys.stderr.write("[wllm] prompt ingekort voor het contextvenster\n")
+        return payload
 
     def _chat(self):
         b = self._body()
@@ -1990,7 +2085,7 @@ class Handler(BaseHTTPRequestHandler):
     def _openai_chat(self):
         b = self._body()
         eng = ENGINES.get(b.get("model") or "")
-        payload = dict(b)
+        payload = self._bewaak_venster(eng, dict(b))
         payload["model"] = eng.model
         if payload.get("stream"):
             self.send_response(200)
@@ -2027,13 +2122,16 @@ class Handler(BaseHTTPRequestHandler):
         prompt = b.get("prompt") or ""
         if isinstance(prompt, list):
             prompt = "\n".join(prompt)
-        payload = {
-            "model": eng.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-            "max_tokens": b.get("max_tokens") or 512,
-            "temperature": b.get("temperature", 0.8),
-        }
+        payload = self._bewaak_venster(
+            eng,
+            {
+                "model": eng.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "max_tokens": b.get("max_tokens") or 512,
+                "temperature": b.get("temperature", 0.8),
+            },
+        )
         r = engine_once(eng, payload, self.connection)
         eng.touch()
         txt = r["choices"][0]["message"].get("content") or ""
