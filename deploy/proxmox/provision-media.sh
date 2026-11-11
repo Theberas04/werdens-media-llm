@@ -87,6 +87,10 @@ for bestand in "$STEM.onnx" "$STEM.onnx.json"; do
 done
 
 log "5/5 Server, configuratie en dienst plaatsen"
+binnen mkdir -p "$TARGET/assets"
+# Het merklogo dat de webpagina's linksboven in de kop tonen.
+pct push "$CTID" "$APP_DIR/assets/werdens-media-logo.png" \
+  "$TARGET/assets/werdens-media-logo.png" --perms 0644
 pct push "$CTID" "$APP_DIR/media/wmlm_media.py" "$TARGET/media/wmlm_media.py" --perms 0755
 
 cat > /tmp/wmlm-media.env <<EOF

@@ -19,6 +19,7 @@ programma's (whisper.cpp en Piper), net als bij de engine.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -42,6 +43,31 @@ BIN = Path(os.environ.get("WMLM_MEDIA_BIN", BASIS.parent / "media" / "bin"))
 STEMPEN = Path(os.environ.get("WMLM_VOICES", BASIS.parent / "media" / "voices"))
 MODELLEN = Path(os.environ.get("WMLM_MEDIA_MODELS", BASIS.parent / "media" / "models"))
 WERKMAP = Path(os.environ.get("WMLM_MEDIA_TMP", BASIS.parent / "data" / "media-tmp"))
+
+# Merk: het logo van Werdens Media staat in assets/ naast de drie lagen. Mist het
+# bestand, dan gaat er een lege PNG van 1x1 over de lijn zodat de pagina nooit een
+# kapot beeld toont.
+def _logo_pad() -> Path:
+    """Zoek het merklogo. In de repo staat dit script in media/, in de container
+    in de projectmap; probeer daarom beide niveau's."""
+    for basis in (BASIS.parent, BASIS):
+        kandidaat = basis / "assets" / "werdens-media-logo.png"
+        if kandidaat.exists():
+            return kandidaat
+    return BASIS.parent / "assets" / "werdens-media-logo.png"
+
+
+LOGO = _logo_pad()
+LEGE_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def logo_bytes() -> bytes:
+    try:
+        return LOGO.read_bytes()
+    except OSError:
+        return LEGE_PNG
 
 
 
@@ -283,10 +309,14 @@ PAGINA = """<!doctype html>
 <html lang="nl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Werdens Media LLM — spraak</title><style>
- :root{--bg:#0b1020;--pane:#0f172e;--line:#243049;--txt:#e2e8f0;--dim:#94a3b8;--teal:#5eead4;--sky:#7dd3fc}
+ /* Huisstijl Werdens Media: navy basis met blauw #2ea3f2 en mint #2ee6a8. */
+ :root{--bg:#0e151d;--pane:#0f172a;--line:#1e2f45;--txt:#f4f7fb;--dim:#b6c7dd;
+       --blauw:#2ea3f2;--mint:#2ee6a8;--licht:#c9d8fb;--teal:var(--mint);--sky:var(--blauw)}
  *{box-sizing:border-box}
  body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 ui-sans-serif,system-ui,"Segoe UI",sans-serif}
- header{padding:22px 28px 16px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#101a34,#0b1020)}
+ header{padding:22px 28px 16px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#132133,#0e151d)}
+ .kop{display:flex;align-items:center;gap:16px}
+ .kop img{height:46px;width:auto;display:block;flex:0 0 auto}
  h1{margin:0;font-size:26px}h1 span{background:linear-gradient(90deg,var(--teal),var(--sky));
    -webkit-background-clip:text;background-clip:text;color:transparent}
  .sub{color:var(--dim);font-size:13px;margin-top:4px}
@@ -297,7 +327,7 @@ PAGINA = """<!doctype html>
  textarea,input,select,button{font:inherit;color:var(--txt);background:#0b1220;
    border:1px solid var(--line);border-radius:9px;padding:10px 12px;width:100%}
  textarea{min-height:120px;resize:vertical}
- button{cursor:pointer;background:linear-gradient(90deg,#0e7490,#0f766e);border:0;font-weight:600;margin-top:10px}
+ button{cursor:pointer;background:linear-gradient(90deg,#1e73be,#2ea3f2);border:0;font-weight:600;margin-top:10px}
  button.rec{background:linear-gradient(90deg,#b91c1c,#7f1d1d)}
  button:hover{filter:brightness(1.12)}
  .uit{margin-top:14px;padding:12px;border:1px dashed var(--line);border-radius:10px;
@@ -306,9 +336,11 @@ PAGINA = """<!doctype html>
  .ok{color:var(--teal)}.fout{color:#fca5a5}
  @media(max-width:760px){main{grid-template-columns:1fr}}
 </style></head><body>
-<header><h1>Werdens <span>Media LLM</span> — spraak</h1>
+<header><div class="kop">
+<img src="/logo.png" alt="Werdens Media" onerror="this.style.display='none'">
+<div><h1>Werdens <span>Media LLM</span> — spraak</h1>
 <div class="sub">Spraak naar tekst met Whisper, spraak uit met Piper. Lokaal, op CPU, geen abonnement.
-<span id="status" class="status"></span></div></header>
+<span id="status" class="status"></span></div></div></div></header>
 <main>
   <div class="pane">
     <h2>Spraak naar tekst</h2>
@@ -457,6 +489,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         pad = self.path.split("?")[0]
+        if pad == "/logo.png":
+            return self._stuur(logo_bytes(), 200, "image/png")
         if pad in ("/", "/index.html"):
             return self._stuur(PAGINA.encode(), 200, "text/html; charset=utf-8")
         if pad == "/health":

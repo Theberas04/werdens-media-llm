@@ -154,7 +154,10 @@ CHAT_STEM="$(basename "${SPEC:-geen}")"
 CHAT_STEM="${CHAT_STEM%.gguf}"
 [ "$CHAT_STEM" = "geen" ] && CHAT_STEM="$EMBED_STEM"
 
-binnen mkdir -p "$TARGET/workspace"
+binnen mkdir -p "$TARGET/workspace" "$TARGET/assets"
+# Het merklogo dat de drie webpagina's linksboven in de kop tonen.
+pct push "$CTID" "$APP_DIR/assets/werdens-media-logo.png" \
+  "$TARGET/assets/werdens-media-logo.png" --perms 0644
 pct push "$CTID" "$APP_DIR/workspace/wmlm_workspace.py" "$TARGET/workspace/wmlm_workspace.py" --perms 0755
 cat > /tmp/wmlm-werkruimte.env <<EOF
 WMLM_DATA=$TARGET/data

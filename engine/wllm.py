@@ -27,6 +27,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -42,6 +43,36 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+# --------------------------------------------------------------------------- #
+# Merk: het logo van Werdens Media staat in assets/ naast de drie lagen.
+# --------------------------------------------------------------------------- #
+def _logo_pad() -> Path:
+    """Zoek het merklogo. In de repo staat dit script in engine/, in de container
+    staat het los in de projectmap; probeer daarom beide niveau's."""
+    hier = Path(__file__).resolve().parent
+    for basis in (hier.parent, hier):
+        kandidaat = basis / "assets" / "werdens-media-logo.png"
+        if kandidaat.exists():
+            return kandidaat
+    return hier.parent / "assets" / "werdens-media-logo.png"
+
+
+LOGO = _logo_pad()
+# Lege PNG van 1x1. Ontbreekt het logobestand (bijvoorbeeld wanneer alleen dit
+# script is gekopieerd), dan krijgt de pagina deze door en toont hij nooit een
+# kapot beeld.
+LEGE_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def logo_bytes() -> bytes:
+    try:
+        return LOGO.read_bytes()
+    except OSError:
+        return LEGE_PNG
+
 
 # --------------------------------------------------------------------------- #
 # Configuratie (env-vars met dezelfde geest als OLLAMA_*)
@@ -876,6 +907,17 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _png(self, body: bytes, code: int = 200):
+        self.send_response(code)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def _status_pagina(self) -> str:
         """Mensvriendelijke statuspagina. Een browser vraagt HTML; een client die
         de API aanspreekt krijgt gewoon JSON op dezelfde plek."""
@@ -917,12 +959,17 @@ class Handler(BaseHTTPRequestHandler):
             "<!doctype html><html lang=\"nl\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"<title>Werdens Media LLM — engine {VERSION}</title><style>"
-            ":root{--bg:#0b1020;--pane:#0f172e;--line:#243049;--txt:#e2e8f0;--dim:#94a3b8;"
-            "--teal:#5eead4;--sky:#7dd3fc}"
+            # Huisstijl Werdens Media: navy basis met blauw #2ea3f2 en mint #2ee6a8.
+            ":root{--bg:#0e151d;--pane:#0f172a;--line:#1e2f45;--txt:#f4f7fb;--dim:#b6c7dd;"
+            "--blauw:#2ea3f2;--mint:#2ee6a8;--licht:#c9d8fb;"
+            "--teal:var(--mint);--sky:var(--blauw)}"
             "*{box-sizing:border-box}"
             "body{margin:0;background:var(--bg);color:var(--txt);"
             "font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}"
-            "header{padding:26px 32px 18px;border-bottom:1px solid var(--line)}"
+            "header{padding:22px 32px 18px;border-bottom:1px solid var(--line);"
+            "background:linear-gradient(180deg,#132133,#0e151d)}"
+            ".kop{display:flex;align-items:center;gap:16px}"
+            ".kop img{height:46px;width:auto;display:block}"
             "h1{margin:0 0 6px;font-size:26px;letter-spacing:-.3px}"
             "h1 span{color:var(--teal)}"
             ".sub{color:var(--dim);font-size:13px}"
@@ -944,9 +991,12 @@ class Handler(BaseHTTPRequestHandler):
             ".ok{color:var(--teal)}"
             "footer{padding:0 32px 32px;color:var(--dim);font-size:13px}"
             "</style></head><body><header>"
+            "<div class=\"kop\"><img src=\"/logo.png\" alt=\"Werdens Media\" "
+            "onerror=\"this.style.display='none'\"><div>"
             f"<h1>Werdens <span>Media LLM</span> — engine</h1>"
             "<div class=\"sub\">Eigen LLM-server met de Ollama-API én de OpenAI-API op dezelfde "
-            f"poort. Alles lokaal, zonder abonnement en zonder tokenkosten.</div></header><main>"
+            f"poort. Alles lokaal, zonder abonnement en zonder tokenkosten.</div>"
+            "</div></div></header><main>"
             "<div class=\"kaart\"><h2>Status</h2><dl>"
             f"<dt>Versie</dt><dd>{VERSION}</dd>"
             "<dt>Toestand</dt><dd class=\"ok\">in bedrijf</dd>"
@@ -1004,6 +1054,8 @@ class Handler(BaseHTTPRequestHandler):
     # -- routing -----------------------------------------------------------
     def do_GET(self):
         path = self.path.split("?")[0]
+        if path == "/logo.png":
+            return self._png(logo_bytes())
         if path in ("/api/version", "/version"):
             return self._json({"version": VERSION})
         if path == "/api/tags":

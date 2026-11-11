@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="assets/werdens-media-logo.png" alt="Werdens Media" width="110">
+</p>
+
+<p align="center">
   <img src="docs/banner.svg" alt="Werdens Media LLM" width="820">
 </p>
 
@@ -34,6 +38,8 @@ van twee, geen licentie die meereist, en alles wat erin zit is van jou.
 
 Alle drie de lagen hebben een eigen webpagina. Hieronder echte opnamen van de
 draaiende stack — op een CPU zonder GPU, met 4 vCPU en 7,6 GB geheugen.
+De pagina's staan in de huisstijl van Werdens Media (navy met blauw en mint) en
+dragen linksboven het logo.
 
 **De engine** (poort 11434) — status, modellen in huis en de endpoints:
 

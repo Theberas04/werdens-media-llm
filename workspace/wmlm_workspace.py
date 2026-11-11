@@ -34,6 +34,7 @@ API:
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import math
@@ -66,6 +67,32 @@ CHUNK_CHARS = int(os.environ.get("WMLM_CHUNK_CHARS", "900"))
 CHUNK_OVERLAP = int(os.environ.get("WMLM_CHUNK_OVERLAP", "120"))
 TOP_K = int(os.environ.get("WMLM_TOP_K", "5"))
 VERSIE = "0.1.0"
+
+# Merk: het logo van Werdens Media staat in assets/ naast de drie lagen. Mist het
+# bestand, dan gaat er een lege PNG van 1x1 over de lijn zodat geen pagina een
+# kapot beeld toont.
+def _logo_pad() -> Path:
+    """Zoek het merklogo. In de repo staat dit script in workspace/, in de
+    container in de projectmap; probeer daarom beide niveau's."""
+    hier = Path(__file__).resolve().parent
+    for basis in (hier.parent, hier):
+        kandidaat = basis / "assets" / "werdens-media-logo.png"
+        if kandidaat.exists():
+            return kandidaat
+    return hier.parent / "assets" / "werdens-media-logo.png"
+
+
+LOGO = _logo_pad()
+LEGE_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def logo_bytes() -> bytes:
+    try:
+        return LOGO.read_bytes()
+    except OSError:
+        return LEGE_PNG
 
 DATA.mkdir(parents=True, exist_ok=True)
 _db_lock = threading.Lock()
@@ -552,13 +579,17 @@ PAGINA = """<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Werdens Media LLM</title>
 <style>
-  :root{--bg:#0b1020;--pane:#0f172e;--line:#243049;--txt:#e2e8f0;--dim:#94a3b8;
-        --teal:#5eead4;--sky:#7dd3fc;--vio:#c4b5fd}
+  /* Huisstijl Werdens Media: navy basis met blauw #2ea3f2 en mint #2ee6a8. */
+  :root{--bg:#0e151d;--pane:#0f172a;--line:#1e2f45;--txt:#f4f7fb;--dim:#b6c7dd;
+        --blauw:#2ea3f2;--mint:#2ee6a8;--licht:#c9d8fb;
+        --teal:var(--mint);--sky:var(--blauw);--vio:var(--licht)}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt);
        font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
   header{padding:22px 28px 16px;border-bottom:1px solid var(--line);
-         background:linear-gradient(180deg,#101a34,#0b1020)}
+         background:linear-gradient(180deg,#132133,#0e151d)}
+  .kop{display:flex;align-items:center;gap:16px}
+  .kop img{height:46px;width:auto;display:block;flex:0 0 auto}
   h1{margin:0;font-size:26px;letter-spacing:-.4px}
   h1 span{background:linear-gradient(90deg,var(--teal),var(--sky),var(--vio));
           -webkit-background-clip:text;background-clip:text;color:transparent}
@@ -573,7 +604,7 @@ PAGINA = """<!doctype html>
   input,textarea,select,button{font:inherit;color:var(--txt);background:#0b1220;
         border:1px solid var(--line);border-radius:9px;padding:9px 11px;width:100%}
   textarea{min-height:110px;resize:vertical}
-  button{cursor:pointer;background:linear-gradient(90deg,#0e7490,#0f766e);border:0;
+  button{cursor:pointer;background:linear-gradient(90deg,#1e73be,#2ea3f2);border:0;
          font-weight:600;margin-top:10px}
   button:hover{filter:brightness(1.12)}
   button.ghost{background:#111c34;border:1px solid var(--line);font-weight:500}
@@ -609,9 +640,14 @@ PAGINA = """<!doctype html>
   code{background:#0b1220;border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:12px}
 </style></head><body>
 <header>
-  <h1>Werdens <span>Media LLM</span></h1>
-  <div class="sub">Werkruimtes met je eigen documenten · antwoorden met bronvermelding · alles lokaal
-    <span id="engine" class="status"></span></div>
+  <div class="kop">
+    <img src="/logo.png" alt="Werdens Media" onerror="this.style.display='none'">
+    <div>
+      <h1>Werdens <span>Media LLM</span></h1>
+      <div class="sub">Werkruimtes met je eigen documenten · antwoorden met bronvermelding · alles lokaal
+        <span id="engine" class="status"></span></div>
+    </div>
+  </div>
 </header>
 <main>
   <aside>
@@ -788,11 +824,11 @@ async function stelVraag(){
 WIDGET = """/* Werdens Media LLM — embed-widget
    Zet dit op je site:
    <script src="http://<server>:8090/widget.js"
-           data-werkruimte="mijn-project" data-kleur="#5eead4"></script> */
+           data-werkruimte="mijn-project" data-kleur="#2ee6a8"></script> */
 (function () {
   var s = document.currentScript;
   var ws = (s && s.dataset.werkruimte) || 'standaard';
-  var kleur = (s && s.dataset.kleur) || '#5eead4';
+  var kleur = (s && s.dataset.kleur) || '#2ee6a8';
   var basis = new URL(s.src).origin;
   var knop = document.createElement('button');
   knop.textContent = 'Vraag het de assistent';
@@ -801,8 +837,8 @@ WIDGET = """/* Werdens Media LLM — embed-widget
     + 'background:' + kleur;
   var kader = document.createElement('iframe');
   kader.style.cssText = 'position:fixed;right:20px;bottom:80px;width:380px;height:560px;'
-    + 'max-width:92vw;max-height:80vh;border:1px solid #243049;border-radius:14px;'
-    + 'z-index:99999;display:none;box-shadow:0 20px 50px rgba(0,0,0,.45);background:#0b1020';
+    + 'max-width:92vw;max-height:80vh;border:1px solid #1e2f45;border-radius:14px;'
+    + 'z-index:99999;display:none;box-shadow:0 20px 50px rgba(0,0,0,.45);background:#0e151d';
   kader.src = basis + '/embed?werkruimte=' + encodeURIComponent(ws);
   knop.onclick = function () {
     kader.style.display = kader.style.display === 'none' ? 'block' : 'none';
@@ -815,18 +851,19 @@ WIDGET = """/* Werdens Media LLM — embed-widget
 EMBED_PAGINA = """<!doctype html><html lang="nl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Werdens Media LLM</title><style>
- body{margin:0;background:#0b1020;color:#e2e8f0;font:14px/1.5 system-ui,sans-serif}
- header{padding:12px 14px;border-bottom:1px solid #243049;font-weight:700}
- header span{color:#5eead4}
+ body{margin:0;background:#0e151d;color:#f4f7fb;font:14px/1.5 system-ui,sans-serif}
+ header{padding:12px 14px;border-bottom:1px solid #1e2f45;font-weight:700}
+ header span{color:#2ee6a8}
  #gesprek{padding:12px;height:calc(100% - 130px);overflow:auto}
- .msg{padding:9px 11px;border-radius:10px;margin-bottom:9px;white-space:pre-wrap;background:#0f172e}
+ .msg{padding:9px 11px;border-radius:10px;margin-bottom:9px;white-space:pre-wrap;background:#0f172a}
  .msg.user{background:#101c36}
- .bron{font-size:12px;color:#94a3b8;margin-top:6px;border-top:1px dashed #243049;padding-top:5px}
- .balk{padding:10px 12px;border-top:1px solid #243049;display:flex;gap:8px}
- input{flex:1;background:#0b1220;border:1px solid #243049;border-radius:9px;color:#e2e8f0;padding:9px}
- button{background:#0e7490;border:0;color:#e2e8f0;border-radius:9px;padding:9px 14px;font-weight:600}
+ .bron{font-size:12px;color:#b6c7dd;margin-top:6px;border-top:1px dashed #1e2f45;padding-top:5px}
+ .logo{height:22px;width:auto;vertical-align:-5px;margin-right:8px}
+ .balk{padding:10px 12px;border-top:1px solid #1e2f45;display:flex;gap:8px}
+ input{flex:1;background:#0b1220;border:1px solid #1e2f45;border-radius:9px;color:#f4f7fb;padding:9px}
+ button{background:linear-gradient(90deg,#1e73be,#2ea3f2);border:0;color:#f4f7fb;border-radius:9px;padding:9px 14px;font-weight:600}
 </style></head><body>
-<header>Werdens <span>Media LLM</span></header>
+<header><img class="logo" src="/logo.png" alt="" onerror="this.style.display='none'">Werdens <span>Media LLM</span></header>
 <div id="gesprek"></div>
 <div class="balk"><input id="v" placeholder="Stel je vraag…" onkeydown="if(event.key==='Enter')vraag()">
 <button onclick="vraag()">Vraag</button></div>
@@ -913,6 +950,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         pad = self.path.split("?")[0]
         try:
+            if pad == "/logo.png":
+                return self._stuur(logo_bytes(), 200, "image/png")
             if pad in ("/", "/index.html"):
                 return self._html(PAGINA)
             if pad == "/health":

@@ -34,7 +34,8 @@ die(){ printf '\033[1;31m[fout]\033[0m %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || die "Draai dit als root op de Proxmox-host."
 command -v pct >/dev/null || die "pct niet gevonden: dit is geen Proxmox VE-host."
 command -v pveam >/dev/null || die "pveam niet gevonden."
-for f in "$APP_DIR/engine/wllm.py" "$SCRIPT_DIR/provision-werdens-media-llm.sh"; do
+for f in "$APP_DIR/engine/wllm.py" "$APP_DIR/assets/werdens-media-logo.png" \
+         "$SCRIPT_DIR/provision-werdens-media-llm.sh"; do
   [ -f "$f" ] || die "$f ontbreekt."
 done
 ip link show "$BRIDGE" >/dev/null 2>&1 || die "Bridge '$BRIDGE' bestaat niet."

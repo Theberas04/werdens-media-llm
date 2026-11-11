@@ -83,6 +83,13 @@ printf 'antwoordt?         '; binnen_bash "curl -fsS --max-time 5 http://127.0.0
 printf 'spraak uit proberen:\n'
 binnen_bash "curl -fsS --max-time 120 http://127.0.0.1:$MD_POORT/v1/audio/speech -d '{\"input\":\"Test van de medialaag.\"}' -o /tmp/proef.wav && ls -lh /tmp/proef.wav | awk '{print \"    \"\$5\" audio geschreven\"}' && curl -fsS --max-time 300 http://127.0.0.1:$MD_POORT/v1/audio/transcriptions -F 'file=@/tmp/proef.wav' | jq -r '\"    teruggehoord: \" + .text'" 2>/dev/null || echo '    proef mislukte'
 
+kop "10. Merk en pagina's"
+for p in "$POORT" "$WK_POORT" "$MD_POORT"; do
+  printf 'logo op poort %-5s ' "$p"
+  binnen_bash "curl -fsS -o /dev/null -w 'HTTP %{http_code}  %{content_type}  %{size_download} bytes\n' http://127.0.0.1:$p/logo.png" \
+    || echo 'niet gevonden'
+done
+
 kop "Samenvatting"
 printf 'engine      : http://<ip-van-container>:%s   (Ollama en OpenAI)\n' "$POORT"
 printf 'werkruimte  : http://<ip-van-container>:%s   (documenten met bronvermelding)\n' "$WK_POORT"
