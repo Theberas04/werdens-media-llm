@@ -124,6 +124,7 @@ helft of minder van wat een vergelijkbare x86-machine doet.
 | `LLAMA_TAG` | `b12262` | versie van de llama.cpp-build |
 | `WLLM_CTX` | `65536` | contextvenster (Hermes eist minimaal 64000) |
 | `WLLM_THREADS` | `0` (automatisch) | rekenkracht-threads; `0` laat de engine zelf kijken wat de machine aankan |
+| `WLLM_UPSTREAM_TIMEOUT` | `1800` | seconden die de engine op de rekenkern wacht; op een cpu mag één lange vraag rustig een kwartier duren |
 
 Voorbeeld met een vast adres en meer rekenkracht:
 

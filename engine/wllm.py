@@ -267,6 +267,12 @@ def _beste_threads() -> int:
 # de engine de extra cores als de container later meer krijgt (na een herstart).
 _gewenst = int(os.environ.get("WLLM_THREADS") or 0)
 THREADS = _gewenst if _gewenst > 0 else _beste_threads()
+
+# Hoe lang de engine op de rekenkern wacht voordat hij een verzoek opgeeft. Ruim
+# genomen, want op een cpu kan één lange vraag met veel tekst erin makkelijk een
+# kwartier duren. Valt de vragende partij eerder weg, dan grijpt de waker in en
+# komt het rekenvak eerder vrij -- deze limiet is alleen voor het echte werk.
+UPSTREAM_TIMEOUT = int(os.environ.get("WLLM_UPSTREAM_TIMEOUT") or 1800)
 # Hermes Agent weigert modellen onder de 64.000 tokens context, dus de default
 # moet daar op of boven zitten. 64k f16 KV-cache is ~2,15 GB; met q8_0 is dat
 # ~1,07 GB en dat past naast Hermes op 8 GB.
@@ -941,7 +947,7 @@ def engine_stream(eng: Engine, payload: dict):
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=3600) as resp:
+        with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT) as resp:
             for raw in resp:
                 line = raw.decode("utf-8", "replace").strip()
                 if not line or not line.startswith("data:"):
@@ -1000,7 +1006,7 @@ def engine_once(eng: Engine, payload: dict, klant=None) -> dict:
             data=json.dumps(p).encode(),
             headers={"Content-Type": "application/json"},
         )
-        resp = urllib.request.urlopen(req, timeout=600)
+        resp = urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT)
         klaar = threading.Event()
         if klant is not None:
             threading.Thread(
