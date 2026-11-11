@@ -16,11 +16,13 @@ BRIDGE="${BRIDGE:-vmbr0}"
 STATIC_IP="${STATIC_IP:-}"
 GATEWAY="${GATEWAY:-}"
 DNS_SERVER="${DNS_SERVER:-1.1.1.1}"
-# Let op: modellen zijn groot. Reken op 3 GB per model, plus ruimte voor groei.
+# Geheugen bepaalt hoe goed het model mag zijn. Bij 64k context kost een
+# Qwen3-8B ongeveer 9,4 GB (gemeten), dus 12 GB laat een echt goed model toe;
+# met 8 GB past alleen een klein model.
 CORES="${CORES:-4}"
-MEMORY="${MEMORY:-8192}"
+MEMORY="${MEMORY:-12288}"
 SWAP="${SWAP:-2048}"
-DISK="${DISK:-40}"
+DISK="${DISK:-60}"
 DEBIAN_MAJOR="${DEBIAN_MAJOR:-13}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"

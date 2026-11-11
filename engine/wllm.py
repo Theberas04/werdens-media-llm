@@ -32,7 +32,9 @@ import json
 import os
 import re
 import signal
+import shutil
 import subprocess
+import struct
 import sys
 import threading
 import time
@@ -44,16 +46,88 @@ from pathlib import Path
 # --------------------------------------------------------------------------- #
 # Configuratie (env-vars met dezelfde geest als OLLAMA_*)
 # --------------------------------------------------------------------------- #
-HOME = Path(os.environ.get("WLLM_HOME", Path(__file__).resolve().parent))
+_SCRIPT_DIR = Path(__file__).resolve().parent
+# De server staat in engine/; de projectmap is dan één niveau hoger, zodat
+# modellen, logs en de engine-binary op de verwachte plek staan.
+_STANDAARD_HOME = _SCRIPT_DIR.parent if _SCRIPT_DIR.name == "engine" else _SCRIPT_DIR
+HOME = Path(os.environ.get("WLLM_HOME", _STANDAARD_HOME))
 MODELS_DIR = Path(os.environ.get("WLLM_MODELS", HOME / "models"))
 BLOBS_DIR = Path(os.environ.get("WLLM_BLOBS", HOME / "blobs"))
 MANIFESTS_DIR = Path(os.environ.get("WLLM_MANIFESTS", HOME / "manifests"))
-ENGINE = Path(
-    os.environ.get(
-        "WLLM_ENGINE",
-        HOME / "engine" / "llama-b12262" / "llama-server",
-    )
-)
+
+
+def gpu_info() -> dict:
+    """Kijk of er een NVIDIA-GPU is en hoeveel geheugen die heeft."""
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return {"aanwezig": False}
+    try:
+        uit = subprocess.run(
+            [exe, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, timeout=15, text=True,
+        )
+        regels = [r.strip() for r in uit.stdout.splitlines() if r.strip()] if uit.returncode == 0 else []
+        if not regels:
+            return {"aanwezig": False}
+        naam, vram = (regels[0].split(",") + ["0"])[:2]
+        return {
+            "aanwezig": True,
+            "naam": naam.strip(),
+            "vram_mb": int(float(vram.strip() or 0)),
+            "aantal": len(regels),
+        }
+    except Exception:  # noqa: BLE001
+        return {"aanwezig": False}
+
+
+GPU = gpu_info()
+
+
+def kies_engine() -> Path:
+    """Pak de juiste engine-binary. Staat er een CUDA-build en is er een GPU,
+    dan die; anders de CPU-build. Zo hoef je alleen een GPU te plaatsen en te
+    herstarten — de rest gaat vanzelf."""
+    vast = os.environ.get("WLLM_ENGINE")
+    if vast:
+        return Path(vast)
+    basis = HOME / "engine"
+    kandidaten = sorted(basis.glob("llama-*/llama-server")) if basis.exists() else []
+    if not kandidaten:
+        return basis / "llama-b12262" / "llama-server"
+    if GPU.get("aanwezig"):
+        cuda = [p for p in kandidaten if "cuda" in str(p).lower()]
+        if cuda:
+            return cuda[-1]
+    cpu = [p for p in kandidaten if "cuda" not in str(p).lower()]
+    return (cpu or kandidaten)[-1]
+
+
+ENGINE = kies_engine()
+
+
+def _ngl() -> int:
+    """Hoeveel model-lagen naar de GPU. 'auto' = alles als er een GPU is."""
+    waarde = os.environ.get("WLLM_NGL", "auto").strip().lower()
+    if waarde == "auto":
+        return 999 if GPU.get("aanwezig") else 0
+    try:
+        return int(waarde)
+    except ValueError:
+        return 0
+
+
+NGL = _ngl()
+
+
+def _kv_type() -> str:
+    """Op CPU is 8-bits KV-cache nodig om 64k context in het geheugen te passen;
+    op een GPU is f16 sneller en nauwkeuriger."""
+    vast = os.environ.get("WLLM_KV_TYPE")
+    if vast:
+        return vast
+    return "f16" if GPU.get("aanwezig") else "q8_0"
+
+
 HOST = os.environ.get("WLLM_HOST", "0.0.0.0")
 PORT = int(os.environ.get("WLLM_PORT", "11434"))
 THREADS = int(os.environ.get("WLLM_THREADS", str(os.cpu_count() or 4)))
@@ -61,13 +135,243 @@ THREADS = int(os.environ.get("WLLM_THREADS", str(os.cpu_count() or 4)))
 # moet daar op of boven zitten. 64k f16 KV-cache is ~2,15 GB; met q8_0 is dat
 # ~1,07 GB en dat past naast Hermes op 8 GB.
 CTX = int(os.environ.get("WLLM_CTX", "65536"))
-KV_TYPE = os.environ.get("WLLM_KV_TYPE", "q8_0")
+KV_TYPE = _kv_type()
 KEEP_ALIVE = int(os.environ.get("WLLM_KEEP_ALIVE", "300"))  # seconden
 ENGINE_PORT_BASE = int(os.environ.get("WLLM_ENGINE_PORT", "18500"))
 VERSION = "0.1.0"
 
 for d in (MODELS_DIR, BLOBS_DIR, MANIFESTS_DIR):
     d.mkdir(parents=True, exist_ok=True)
+
+
+# Kwaliteitstrappen: het grootste model dat op deze machine past. Hoe meer
+# geheugen, hoe beter het antwoord. De drempels zijn GEMETEN met
+# 'aanbevelen --meten': gewichten plus KV-cache bij 64k context, Q4_K_M, CPU en
+# 8-bits KV-cache. Op een GPU telt alleen het videogeheugen en is de KV-cache
+# f16 (dus ruimer), waardoor dezelfde modellen wél passen.
+#
+# Let op het verschil tussen de families: Qwen3 heeft 8 KV-koppen met
+# kop-lengte 128, de Llama-3.2-familie 8 KV-koppen met lengte 64. Daardoor is
+# het KV-geheugen van Llama-3.2 vier keer zo klein en past Llama-3.2-3B bij 64k
+# waar Qwen3-4B en 8B niet passen.
+MODEL_TRAPPEN = (
+    (27000, "unsloth/Qwen3-32B-GGUF", "Qwen3-32B-Q4_K_M.gguf",
+     "de zwaarste kwaliteit die thuis nog past"),
+    (20700, "unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF",
+     "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+     "MoE-model: sterk én snel, want het rekent maar een deel van het netwerk"),
+    (13700, "unsloth/Qwen3-14B-GGUF", "Qwen3-14B-Q4_K_M.gguf", "goede balans"),
+    (9400, "unsloth/Qwen3-8B-GGUF", "Qwen3-8B-Q4_K_M.gguf", "sterk"),
+    (6900, "unsloth/Qwen3-4B-Instruct-2507-GGUF", "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+     "goede kwaliteit voor een kleine machine"),
+    (3100, "unsloth/Llama-3.2-3B-Instruct-GGUF", "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+     "kleine KV-cache: past bij 64k context waar Qwen3-4B en 8B niet passen"),
+    (1700, "unsloth/Llama-3.2-1B-Instruct-GGUF", "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+     "snelst en het zuinigst met geheugen"),
+)
+
+# Op een CPU moet het besturingssysteem en de rest van de machine er ook nog
+# bij passen; op een GPU telt alleen het videogeheugen.
+CPU_OVERHEAD_MB = int(os.environ.get("WLLM_CPU_OVERHEAD_MB", "2000"))
+
+
+def beschikbaar_mb() -> tuple[int, str]:
+    """Het geheugen dat het model mag gebruiken, plus waar dat op gebaseerd is."""
+    if GPU.get("aanwezig"):
+        return int(GPU.get("vram_mb") or 0), "VRAM"
+    totaal = 0
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for regel in fh:
+                if regel.startswith("MemTotal:"):
+                    totaal = int(regel.split()[1]) // 1024
+                    break
+    except Exception:  # noqa: BLE001
+        pass
+    return max(0, totaal - CPU_OVERHEAD_MB), f"RAM min {CPU_OVERHEAD_MB} MB voor het systeem"
+
+
+def aanbevolen_model() -> dict:
+    """Het beste model dat op deze machine past — dit is de knop voor kwaliteit."""
+    mb, bron = beschikbaar_mb()
+    for drempel, repo, bestand, opmerking in MODEL_TRAPPEN:
+        if mb >= drempel:
+            return {
+                "repo": repo,
+                "bestand": bestand,
+                "opmerking": opmerking,
+                "geheugen_mb": mb,
+                "gebaseerd_op": bron,
+                "pull": f"pull hf:{repo}/{bestand}",
+            }
+    return {}
+
+
+# --------------------------------------------------------------------------- #
+# GGUF-kop lezen: zo weten we écht hoeveel een model nodig heeft in plaats van
+# te gokken op een vuistregel. De metadata staat vooraan in het bestand.
+# --------------------------------------------------------------------------- #
+GGUF_TYPES = {
+    0: "B", 1: "b", 2: "H", 3: "h", 4: "I", 5: "i", 6: "f", 7: "?",
+    10: "Q", 11: "q", 12: "d",
+}
+GGUF_KOP_BYTES = 4 * 1024 * 1024
+
+
+def _lees(offset: int, fmt: str, data: bytes):
+    grootte = struct.calcsize(fmt)
+    return struct.unpack_from(fmt, data, offset)[0], offset + grootte
+
+
+def _lees_tekst(offset: int, data: bytes) -> tuple[str, int]:
+    n, offset = _lees(offset, "<Q", data)
+    return data[offset:offset + n].decode("utf-8", "replace"), offset + n
+
+
+def gguf_meta(data: bytes, stop_bij: set[str] | None = None) -> dict:
+    """Lees de metadata-tabel uit de kop van een GGUF-bestand.
+
+    ``stop_bij`` laat het lezen stoppen zodra die sleutels binnen zijn. Dat is
+    nodig omdat de tokenizer-lijst (honderdduizenden teksten) in dezelfde tabel
+    staat en zomaar tientallen megabytes kost — terwijl de cijfers die wij
+    willen (architectuur, lagen, koppen) helemaal vooraan staan.
+    """
+    if data[:4] != b"GGUF":
+        raise ValueError("geen GGUF-bestand")
+    _, offset = _lees(4, "<I", data)          # versie
+    _, offset = _lees(offset, "<Q", data)     # aantal tensors
+    aantal, offset = _lees(offset, "<Q", data)
+    meta: dict = {}
+    for _ in range(aantal):
+        try:
+            sleutel, offset = _lees_tekst(offset, data)
+            soort, offset = _lees(offset, "<I", data)
+            if soort == 8:
+                waarde, offset = _lees_tekst(offset, data)
+            elif soort == 9:
+                etype, offset = _lees(offset, "<I", data)
+                lengte, offset = _lees(offset, "<Q", data)
+                waarden = []
+                for _i in range(lengte):
+                    if etype == 8:
+                        w, offset = _lees_tekst(offset, data)
+                    else:
+                        fmt = GGUF_TYPES.get(etype)
+                        if fmt is None:
+                            raise ValueError(f"onbekend gegevenstype {etype} in GGUF")
+                        w, offset = _lees(offset, "<" + fmt, data)
+                    waarden.append(w)
+                waarde = waarden
+            else:
+                fmt = GGUF_TYPES.get(soort)
+                if fmt is None:
+                    raise ValueError(f"onbekend gegevenstype {soort} in GGUF")
+                waarde, offset = _lees(offset, "<" + fmt, data)
+        except struct.error:
+            # kop te klein voor de rest; wat we al hebben is genoeg
+            break
+        meta[sleutel] = waarde
+        if stop_bij and stop_bij <= set(meta):
+            break
+    return meta
+
+
+def _feiten_uit_kop(kop: bytes, gewicht_mb: int, ctx: int, kv_bits: int) -> dict:
+    """Bereken architectuur en geheugengebruik uit de GGUF-kop."""
+    basis = gguf_meta(kop, stop_bij={"general.architecture"})
+    arch = str(basis.get("general.architecture", "onbekend"))
+    meta = gguf_meta(kop, stop_bij={
+        f"{arch}.block_count",
+        f"{arch}.attention.head_count",
+        f"{arch}.attention.head_count_kv",
+        f"{arch}.attention.key_length",
+        f"{arch}.attention.value_length",
+        f"{arch}.embedding_length",
+    })
+    lagen = int(meta.get(f"{arch}.block_count") or 0)
+    koppen = int(meta.get(f"{arch}.attention.head_count") or 0)
+    kv_koppen = int(meta.get(f"{arch}.attention.head_count_kv") or koppen)
+    kop_lengte = int(
+        meta.get(f"{arch}.attention.key_length")
+        or (int(meta.get(f"{arch}.embedding_length") or 0) // koppen if koppen else 0)
+    )
+    waarde_lengte = int(meta.get(f"{arch}.attention.value_length") or kop_lengte)
+    per_token = lagen * kv_koppen * (kop_lengte + waarde_lengte) * 2  # f16
+    kv_mb = int(per_token * ctx * (kv_bits / 16) // 1048576)
+    return {
+        "architectuur": arch,
+        "lagen": lagen,
+        "aandachtskoppen": koppen,
+        "kv_koppen": kv_koppen,
+        "kop_lengte": kop_lengte,
+        "waarde_lengte": waarde_lengte,
+        "gewicht_mb": gewicht_mb,
+        "context": ctx,
+        "kv_type": f"q{kv_bits}_0" if kv_bits == 8 else "f16",
+        "kv_mb": kv_mb,
+        "nodig_mb": gewicht_mb + kv_mb,
+        "beschikbaar_mb": beschikbaar_mb()[0],
+        "kv_bytes_per_token": int(per_token * (kv_bits / 16)),
+        "past": gewicht_mb + kv_mb <= beschikbaar_mb()[0],
+    }
+
+
+def model_feiten(pad: Path, ctx: int | None = None, kv_bits: int = 8) -> dict:
+    """Architectuur en geheugengebruik van een model, uit het bestand zelf."""
+    ctx = int(ctx or CTX)
+    with pad.open("rb") as fh:
+        kop = fh.read(GGUF_KOP_BYTES)
+    feiten = _feiten_uit_kop(kop, pad.stat().st_size // 1048576, ctx, kv_bits)
+    feiten["bestand"] = pad.name
+    return feiten
+
+
+def feiten_van_repo(repo: str, bestand: str, ctx: int | None = None, kv_bits: int = 8) -> dict:
+    """Hetzelfde, maar zonder het model te downloaden: alleen de eerste
+    megabytes van het bestand worden opgehaald (een Range-verzoek van 1 MB), en
+    de bestandsgrootte via een HEAD-verzoek. Zo is het advies gemeten in plaats
+    van geraden."""
+    ctx = int(ctx or CTX)
+    url = f"https://huggingface.co/{repo}/resolve/main/{bestand}"
+    kop = b""
+    lengte = 0
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(url, method="HEAD"), timeout=30
+        ) as r:
+            lengte = int(r.headers.get("Content-Length") or 0)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(url, headers={"Range": f"bytes=0-{GGUF_KOP_BYTES - 1}"}),
+            timeout=60,
+        ) as r:
+            kop = r.read(GGUF_KOP_BYTES)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"kon de modelkop niet ophalen: {e}") from e
+    feiten = _feiten_uit_kop(kop, lengte // 1048576, ctx, kv_bits)
+    feiten["bestand"] = bestand
+    feiten["repo"] = repo
+    return feiten
+
+
+def grootste_context_die_past(pad: Path, kv_bits: int = 8) -> int:
+    """Welk contextvenster kan dit model halen binnen het beschikbare geheugen?"""
+    try:
+        feiten = model_feiten(pad, 1024, kv_bits)
+    except Exception:  # noqa: BLE001
+        return 0
+    ruimte = feiten["beschikbaar_mb"] - feiten["gewicht_mb"] - 512
+    per_token = feiten["kv_bytes_per_token"]
+    if ruimte <= 0 or per_token <= 0:
+        return 0
+    tokens = (ruimte * 1048576) // per_token
+    # afronden naar beneden op een macht van twee, zoals llama.cpp dat fijn vindt
+    macht = 1024
+    while macht * 2 <= tokens:
+        macht *= 2
+    return int(macht)
 
 
 def now_iso() -> str:
@@ -352,6 +656,10 @@ class Engine:
                 KV_TYPE,
                 "-ctv",
                 KV_TYPE,
+                # GPU-offload: dit is de grootste kwaliteitswinst — met meer
+                # rekenkracht kan er een groter en beter model op.
+                "-ngl",
+                str(NGL),
                 # Embedding-modellen hebben deze vlag nodig; llama-server weigert
                 # /v1/embeddings anders. Auto-detectie op de bestandsnaam.
                 *(["--embeddings"] if "embed" in self.gguf.stem.lower() else []),
@@ -612,7 +920,19 @@ class Handler(BaseHTTPRequestHandler):
                 }
             )
         if path in ("/", "/health"):
-            return self._json({"status": "ok", "version": VERSION, "engine": str(ENGINE)})
+            return self._json(
+                {
+                    "status": "ok",
+                    "version": VERSION,
+                    "engine": str(ENGINE),
+                    "gpu": GPU,
+                    "n_gpu_layers": NGL,
+                    "context": CTX,
+                    "kv_type": KV_TYPE,
+                    "threads": THREADS,
+                    "aanbevolen_model": aanbevolen_model(),
+                }
+            )
         return self._err("not found", 404)
 
     def do_POST(self):
@@ -997,6 +1317,14 @@ def cmd_serve(_a):
     print(f"  OpenAI-API : http://{HOST}:{PORT}/v1/...")
     print(f"  modellen   : {MODELS_DIR}")
     print(f"  threads={THREADS} ctx={CTX} keep_alive={KEEP_ALIVE}s")
+    if GPU.get("aanwezig"):
+        print(f"  GPU        : {GPU.get('naam')} ({GPU.get('vram_mb')} MB) — "
+              f"n_gpu_layers={NGL}, kv={KV_TYPE}")
+    else:
+        print(f"  GPU        : geen — alles op CPU, n_gpu_layers={NGL}, kv={KV_TYPE}")
+    advies = aanbevolen_model()
+    if advies:
+        print(f"  beste model: {advies['bestand']} ({advies['opmerking']})")
 
     def bye(*_s):
         ENGINES.shutdown()
@@ -1040,6 +1368,88 @@ def cmd_run(a):
     print()
 
 
+def cmd_gpu(_a):
+    print(json.dumps(
+        {"gpu": GPU, "n_gpu_layers": NGL, "kv_type": KV_TYPE, "context": CTX,
+         "threads": THREADS, "engine": str(ENGINE), "aanbevolen_model": aanbevolen_model()},
+        ensure_ascii=False, indent=2,
+    ))
+
+
+def _aanbevelen_meten() -> None:
+    """Haal van elk model in de tabel de echte architectuur op (ongeveer 1 MB per
+    model) en bepaal wat er op deze machine écht past. Geen vuistregels."""
+    mb, bron = beschikbaar_mb()
+    print(f"Deze machine : {mb} MB bruikbaar ({bron})")
+    print(f"Context      : {CTX} tokens, KV-cache {KV_TYPE}")
+    if GPU.get("aanwezig"):
+        print(f"GPU          : {GPU.get('naam')} ({GPU.get('vram_mb')} MB)")
+    print()
+    print(f"{'model':<46}{'gewichten':>11}{'KV-cache':>10}{'nodig':>9}{'past':>6}")
+    beste = None
+    for _drempel, repo, bestand, opmerking in MODEL_TRAPPEN:
+        try:
+            feiten = feiten_van_repo(repo, bestand, CTX)
+        except Exception as e:  # noqa: BLE001
+            print(f"{bestand:<46}{'?':>11}{'?':>10}{'?':>9}   ({e})")
+            continue
+        print(
+            f"{bestand:<46}{str(feiten['gewicht_mb']) + ' MB':>11}"
+            f"{str(feiten['kv_mb']) + ' MB':>10}{str(feiten['nodig_mb']) + ' MB':>9}"
+            f"{('ja' if feiten['past'] else 'nee'):>6}"
+        )
+        if feiten["past"] and beste is None:
+            beste = (repo, bestand, opmerking, feiten)
+    print()
+    if beste:
+        repo, bestand, opmerking, feiten = beste
+        print(f"Beste model dat past: {bestand} — {opmerking}")
+        print(f"  {feiten['gewicht_mb']} MB gewichten + {feiten['kv_mb']} MB KV-cache "
+              f"= {feiten['nodig_mb']} MB van {feiten['beschikbaar_mb']} MB")
+        print(f"  {feiten['lagen']} lagen, {feiten['kv_koppen']} KV-koppen, "
+              f"kop-lengte {feiten['kop_lengte']}")
+        print(f"  ophalen: python3 {Path(__file__).name} pull hf:{repo}/{bestand}")
+    else:
+        print("Geen enkel model uit de lijst past bij dit contextvenster.")
+        print("Zet WLLM_CTX lager, geef de machine meer geheugen, of zet er een GPU in.")
+
+
+def cmd_modelinfo(a):
+    pad = STORE.resolve(a.model)
+    feiten = model_feiten(pad, a.context)
+    print(json.dumps(feiten, ensure_ascii=False, indent=2))
+    past = feiten["nodig_mb"] <= feiten["beschikbaar_mb"]
+    print(f"\n{'PAST' if past else 'PAST NIET'}: {feiten['nodig_mb']} MB nodig, "
+          f"{feiten['beschikbaar_mb']} MB beschikbaar")
+    groot = grootste_context_die_past(pad)
+    if groot:
+        print(f"Grootste contextvenster dat op deze machine past: {groot} tokens")
+    if not past:
+        print("Zet WLLM_CTX lager, gebruik een kleiner model, of zet er een GPU in.")
+
+
+def cmd_aanbevelen(a):
+    if getattr(a, "meten", False):
+        return _aanbevelen_meten()
+
+    advies = aanbevolen_model()
+    mb, bron = advies.get("geheugen_mb"), advies.get("gebaseerd_op")
+    if GPU.get("aanwezig"):
+        print(f"GPU gevonden: {GPU.get('naam')} met {GPU.get('vram_mb')} MB VRAM")
+    else:
+        print(f"Geen GPU gevonden; er wordt op CPU gerekend met {mb} MB {bron}")
+    if not advies:
+        print("Kon geen advies bepalen.")
+        return
+    print(f"Beste model dat hier past: {advies['bestand']}")
+    print(f"  {advies['opmerking']}")
+    print(f"  ophalen: python3 {Path(__file__).name} {advies['pull']}")
+    if getattr(a, "ophalen", False):
+        for regel in api("/api/pull", {"model": f"hf:{advies['repo']}/{advies['bestand']}",
+                                       "stream": True}, stream=True):
+            print(regel.get("status") or regel.get("error") or regel)
+
+
 def main():
     p = argparse.ArgumentParser(prog="wllm", description="Eigen Ollama-compatible LLM-server")
     sub = p.add_subparsers(dest="cmd")
@@ -1054,6 +1464,16 @@ def main():
     rn.add_argument("prompt", nargs="+")
     rn.add_argument("--temperature", type=float, default=0.7)
     rn.set_defaults(fn=cmd_run)
+    sub.add_parser("gpu", help="toon GPU, instellingen en het beste model").set_defaults(fn=cmd_gpu)
+    ad = sub.add_parser("aanbevelen", help="advies: het beste model voor deze machine")
+    ad.add_argument("--ophalen", action="store_true", help="het advies meteen downloaden")
+    ad.add_argument("--meten", action="store_true",
+                    help="de echte cijfers van elk model ophalen (1 MB per model)")
+    ad.set_defaults(fn=cmd_aanbevelen)
+    mi = sub.add_parser("model-info", help="architectuur en geheugengebruik van een model")
+    mi.add_argument("model")
+    mi.add_argument("--context", type=int, default=None)
+    mi.set_defaults(fn=cmd_modelinfo)
     a = p.parse_args()
     if not getattr(a, "fn", None):
         p.print_help()

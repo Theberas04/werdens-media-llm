@@ -75,14 +75,14 @@ aanpassing werkt.
 ```bash
 # chat, Ollama-vorm met streaming
 curl http://192.168.1.100:11434/api/chat -d '{
-  "model": "qwen3-4b-instruct-2507-q4_k_m",
+  "model": "Llama-3.2-3B-Instruct-Q4_K_M",
   "messages": [{"role": "user", "content": "Noem drie Nederlandse provincies."}],
   "stream": true
 }'
 
 # chat, OpenAI-vorm
 curl http://192.168.1.100:11434/v1/chat/completions -d '{
-  "model": "qwen3-4b-instruct-2507-q4_k_m",
+  "model": "Llama-3.2-3B-Instruct-Q4_K_M",
   "messages": [{"role": "user", "content": "Hallo"}]
 }'
 ```
@@ -93,8 +93,11 @@ curl http://192.168.1.100:11434/v1/chat/completions -d '{
 python3 engine/wllm.py serve        # server starten
 python3 engine/wllm.py list         # modellen met grootte, quantisatie en digest
 python3 engine/wllm.py ps           # wat er nu geladen is
-python3 engine/wllm.py pull hf:unsloth/Qwen3-4B-Instruct-2507-GGUF/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
-python3 engine/wllm.py run qwen3-4b-instruct-2507-q4_k_m "Wat is een LLM?"
+python3 engine/wllm.py aanbevelen            # welk model past op deze machine?
+python3 engine/wllm.py aanbevelen --meten    # dezelfde vraag, met echte cijfers
+python3 engine/wllm.py model-info <model>    # architectuur en geheugengebruik
+python3 engine/wllm.py pull hf:unsloth/Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+python3 engine/wllm.py run Llama-3.2-3B-Instruct-Q4_K_M "Wat is een LLM?"
 ```
 
 ## Koppelen
@@ -102,7 +105,7 @@ python3 engine/wllm.py run qwen3-4b-instruct-2507-q4_k_m "Wat is een LLM?"
 **Hermes Agent** (per sessie, zonder je configuratie te veranderen):
 
 ```bash
-hermes chat -q "vraag" -m qwen3-4b-instruct-2507-q4_k_m \
+hermes chat -q "vraag" -m Llama-3.2-3B-Instruct-Q4_K_M \
   --provider custom --base-url http://192.168.1.100:11434/v1 --api-key wmlm-local
 ```
 
@@ -115,6 +118,41 @@ Twee dingen om te weten voordat je dit doet:
 
 **Je eigen apps**: alles wat OpenAI of Ollama praat, kan tegen deze server. Geen
 API-sleutel nodig en er verlaat niets je eigen netwerk.
+
+## Welk model past op jouw machine?
+
+Dit is de knop voor kwaliteit: hoe groter het model, hoe beter het antwoord. Maar
+grootte is niet gratis — bij 64k context (wat Hermes eist) kost de KV-cache
+alleen al ettelijke gigabytes.
+
+De server meet het zelf, uit de architectuur in de GGUF-kop:
+
+```bash
+python3 engine/wllm.py aanbevelen --meten
+```
+
+Dat haalt per model ongeveer 1 MB op (de kop, niet het hele bestand) en rekent
+uit wat er past. Gemeten voorbeeld op een CPU zonder GPU met 8 GB en 64k context:
+
+| Model | Gewichten | KV-cache | Nodig | Past in 5.825 MB? |
+|---|---|---|---|---|
+| Qwen3-32B Q4_K_M | 18.846 MB | 8.192 MB | 27.038 MB | nee |
+| Qwen3-30B-A3B Q4_K_M | 17.697 MB | 3.072 MB | 20.769 MB | nee |
+| Qwen3-14B Q4_K_M | 8.584 MB | 5.120 MB | 13.704 MB | nee |
+| Qwen3-8B Q4_K_M | 4.794 MB | 4.608 MB | 9.402 MB | nee |
+| Qwen3-4B Q4_K_M | 2.381 MB | 4.608 MB | 6.989 MB | nee |
+| **Llama-3.2-3B Q4_K_M** | 1.925 MB | 3.584 MB | 5.509 MB | **ja** |
+| Llama-3.2-1B Q4_K_M | 770 MB | 1.024 MB | 1.794 MB | ja |
+
+De uitkomst is niet wat je zou verwachten: de **Llama-3.2-familie** heeft 28
+lagen met kop-lengte 128, Qwen3 heeft 36 lagen met dezelfde kop-lengte. Daardoor
+is de KV-cache van Llama-3.2 veel kleiner en past Llama-3.2-3B bij 64k waar
+Qwen3-4B en 8B niet passen. Op een gewone CPU met 8 GB is Llama-3.2-3B dus het
+beste dat je kunt draaien.
+
+Wil je echt kwaliteit (Qwen3-8B of groter), dan is er geen instelling die dat
+oplost: er moet geheugen bij, of een GPU. Op een GPU telt alleen het
+videogeheugen en is de KV-cache f16, waardoor dezelfde modellen wél passen.
 
 ## Configuratie
 

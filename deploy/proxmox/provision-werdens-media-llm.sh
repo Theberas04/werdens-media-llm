@@ -24,8 +24,12 @@ TARGET="${TARGET:-/opt/werdens-media-llm}"
 DIENST="${DIENST:-werdens-media-llm}"
 GEBRUIKER="${GEBRUIKER:-wmlm}"
 LLAMA_TAG="${LLAMA_TAG:-b12262}"
-MODEL_REPO="${WMLM_MODEL_REPO:-unsloth/Qwen3-4B-Instruct-2507-GGUF}"
-MODEL_FILE="${WMLM_MODEL_FILE:-Qwen3-4B-Instruct-2507-Q4_K_M.gguf}"
+# Laat het chatmodel standaard LEEG: dan kiezen we het grootste model dat op
+# deze container past, door het de engine zelf te laten uitrekenen (gemeten
+# architectuur uit de GGUF-kop, plus de KV-cache bij het ingestelde
+# contextvenster). Zo staat er nooit een model in dat niet past.
+MODEL_REPO="${WMLM_MODEL_REPO:-}"
+MODEL_FILE="${WMLM_MODEL_FILE:-}"
 EMBED_REPO="${WMLM_EMBED_REPO:-nomic-ai/nomic-embed-text-v1.5-GGUF}"
 EMBED_FILE="${WMLM_EMBED_FILE:-nomic-embed-text-v1.5.Q8_0.gguf}"
 SKIP_MODELS="${SKIP_MODELS:-0}"
@@ -64,20 +68,13 @@ fi
 binnen test -x "$TARGET/engine/llama-$LLAMA_TAG/llama-server" || die "llama-server niet uitvoerbaar na uitpakken."
 log "    engine-versie: $(binnen "$TARGET/engine/llama-$LLAMA_TAG/llama-server" --version 2>&1 | head -1)"
 
-log "4/6 Modellen downloaden"
+log "4/6 Embeddingmodel downloaden (het chatmodel kiezen we straks op maat)"
 if [ "$SKIP_MODELS" = "1" ]; then
   warn "SKIP_MODELS=1 — modellen overgeslagen. Haal ze later met: pct exec $CTID -- python3 $TARGET/wllm.py pull hf:<repo>/<bestand>.gguf"
-else
-  if ! binnen test -s "$TARGET/models/$MODEL_FILE"; then
-    log "    chatmodel: $MODEL_FILE (enkele GB, dit duurt even)"
-    binnen_bash "cd $TARGET/models && curl -fL --retry 3 -o '$MODEL_FILE.part' 'https://huggingface.co/$MODEL_REPO/resolve/main/$MODEL_FILE' && mv '$MODEL_FILE.part' '$MODEL_FILE'" \
-      || die "Chatmodel downloaden mislukte."
-  fi
-  if ! binnen test -s "$TARGET/models/$EMBED_FILE"; then
-    log "    embeddingmodel: $EMBED_FILE (klein)"
-    binnen_bash "cd $TARGET/models && curl -fL --retry 3 -o '$EMBED_FILE.part' 'https://huggingface.co/$EMBED_REPO/resolve/main/$EMBED_FILE' && mv '$EMBED_FILE.part' '$EMBED_FILE'" \
-      || die "Embeddingmodel downloaden mislukte."
-  fi
+elif ! binnen test -s "$TARGET/models/$EMBED_FILE"; then
+  log "    embeddingmodel: $EMBED_FILE (klein)"
+  binnen_bash "cd $TARGET/models && curl -fL --retry 3 -o '$EMBED_FILE.part' 'https://huggingface.co/$EMBED_REPO/resolve/main/$EMBED_FILE' && mv '$EMBED_FILE.part' '$EMBED_FILE'" \
+    || die "Embeddingmodel downloaden mislukte."
 fi
 
 log "5/6 Server, configuratie en dienst plaatsen"
@@ -127,7 +124,31 @@ rm -f /tmp/wmlm.service
 binnen chown -R "$GEBRUIKER:$GEBRUIKER" "$TARGET"
 binnen_bash "systemctl daemon-reload && systemctl enable $DIENST >/dev/null 2>&1 && systemctl restart $DIENST"
 
-log "6/6 Testen of de API antwoordt"
+log "6/6 Chatmodel kiezen en ophalen"
+if [ "$SKIP_MODELS" = "1" ]; then
+  warn "SKIP_MODELS=1 — chatmodel overgeslagen."
+else
+  if [ -n "$MODEL_FILE" ]; then
+    SPEC="hf:$MODEL_REPO/$MODEL_FILE"
+    ZEGEL="(zelf gekozen)"
+  else
+    ADVIES="$(binnen_bash "cd $TARGET && WLLM_CTX=$WLLM_CTX python3 wllm.py aanbevelen" 2>/dev/null | grep -i 'ophalen:' || true)"
+    SPEC="$(printf '%s' "$ADVIES" | sed 's/.*pull //' | tr -d '\r' | xargs || true)"
+    ZEGEL="$(printf '%s' "$ADVIES" | sed 's/.*Beste model dat past: //' | head -1)"
+  fi
+  if [ -z "$SPEC" ]; then
+    warn "Kon geen passend model bepalen; haal er zelf een met:"
+    warn "  pct exec $CTID -- python3 $TARGET/wllm.py aanbevelen"
+    warn "  pct exec $CTID -- python3 $TARGET/wllm.py pull hf:<repo>/<bestand>.gguf"
+  else
+    log "    gekozen: $SPEC $ZEGEL"
+    log "    dit zijn enkele gigabytes; de voortgang komt hieronder"
+    binnen_bash "cd $TARGET && WLLM_CTX=$WLLM_CTX python3 wllm.py pull '$SPEC'" \
+      || warn "Model ophalen mislukte. Probeer later: pct exec $CTID -- python3 $TARGET/wllm.py pull $SPEC"
+  fi
+fi
+
+log "Testen of de API antwoordt"
 OK=0
 for _ in $(seq 1 20); do
   if binnen_bash "curl -fsS --max-time 3 http://127.0.0.1:$POORT/api/version >/dev/null 2>&1"; then OK=1; break; fi

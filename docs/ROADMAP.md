@@ -53,15 +53,29 @@ Eigen implementatie, geen overgenomen code. Wat er komt:
 - **REST-API** met sleutels per werkruimte, voor je eigen apps
 - **Gesprekken en threads** met geschiedenis per werkruimte
 
-## Laag 3 — Media: in aanbouw
+## Laag 3 — Media: spraak werkt
 
-- **Spraak naar tekst**: Whisper (whisper.cpp), draait op CPU
-- **Spraak uit**: Piper met Nederlandse stemmen, draait op CPU
-- **Beeld**: ComfyUI met SDXL of FLUX — traag op CPU (minuten per plaat), snel met GPU
-- **Video**: Wan of LTX-Video — vereist een NVIDIA-GPU met 12 tot 24 GB
+`media/wmlm_media.py` is gebouwd en getest op CPU (geen GPU nodig):
 
-Alles komt achter dezelfde OpenAI-vormige endpoints (`/v1/audio/transcriptions`,
-`/v1/audio/speech`, `/v1/images/generations`), zodat elke client hetzelfde aanspreekt.
+| Functie | Endpoint | Techniek | Gemeten op 4 vCPU |
+|---|---|---|---|
+| Spraak naar tekst | `/v1/audio/transcriptions` | whisper.cpp, model `small` | 6,8 s audio in 9,8 s (dus iets langzamer dan realtime) |
+| Spraak uit | `/v1/audio/speech` | Piper, stem `nl_NL-mls-medium` | 8,7 s audio in 0,54 s (16× sneller dan realtime) |
+| Beeld | `/v1/images/generations` | ComfyUI, zodra `WMLM_COMFY_URL` is ingesteld | nog niet aangesloten |
+
+De heen-en-weer-test is gedaan: Piper sprak een Nederlandse zin in, Whisper
+schreef die vrijwel foutloos terug ("Alles draait lokaal, zonder abonnement en
+zonder tokenkosten"). Alleen de merknaam werd verhaspeld — Piper spreekt
+"Werdens Media LLM" niet goed uit, en dan hoort Whisper iets anders. Voor
+spraakberichten van mensen is dat geen probleem.
+
+Werkende endpoints: `/v1/audio/transcriptions` (multipart en rauw bestand),
+`/v1/audio/speech`, `/v1/voices`, `/health` en een webpagina op `/` waarin je
+met de microfoon kunt opnemen en tekst kunt laten voorlezen. Audioformaten
+worden met ffmpeg omgezet naar 16 kHz mono, dus webm, ogg en mp3 werken ook.
+
+Nog te doen: **beeld** (ComfyUI aansluiten) en **video** (Wan of LTX-Video —
+vereist een NVIDIA-GPU met 12 tot 24 GB).
 
 ## Onderdelen van derden en hun licenties
 
