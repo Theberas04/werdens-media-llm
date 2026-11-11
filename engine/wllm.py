@@ -648,6 +648,17 @@ MODEL_TRAPPEN = (
 # bij passen; op een GPU telt alleen het videogeheugen.
 CPU_OVERHEAD_MB = int(os.environ.get("WLLM_CPU_OVERHEAD_MB", "2000"))
 
+# Hoe lang mag de rekenkern nog doorwerken nadat de vragende partij is weggevallen?
+# Tijdens het verwerken van een grote prompt merkt llama-server een gesloten
+# verbinding niet, dus hij blijft minutenlang rekenen voor niemand. Met één
+# rekenvak houdt dat elke volgende vraag tegen. Daarom stoppen we de kern als het
+# na deze seconden nog loopt; het volgende verzoek laadt hem opnieuw (seconden).
+HERSTEL_NA = int(os.environ.get("WLLM_HERSTEL_NA", "20"))
+
+# Een verzoek dat langer dan dit achter een ander verzoek in de rij staat, krijgt
+# een eerlijk antwoord in plaats van een half uur wachten.
+WACHT_LIMIET = int(os.environ.get("WLLM_WACHT_LIMIET", "900"))
+
 
 def beschikbaar_mb() -> tuple[int, str]:
     """Het geheugen dat het model mag gebruiken, plus waar dat op gebaseerd is."""
@@ -1091,6 +1102,7 @@ class Engine:
         self.proc: subprocess.Popen | None = None
         self.ready = False
         self.busy = 0
+        self.bezig_sinds: float | None = None
         self.last_used = time.time()
         self.load_duration_ns = 0
         self.lock = threading.Lock()
@@ -1162,6 +1174,43 @@ class Engine:
                 except Exception:
                     time.sleep(0.4)
             raise RuntimeError("engine niet klaar binnen 300s")
+
+    def begin(self) -> None:
+        """Boek een verzoek in, en onthoud sinds wanneer er gewerkt wordt."""
+        if self.busy == 0:
+            self.bezig_sinds = time.time()
+        self.busy += 1
+
+    def eindig(self) -> None:
+        self.busy = max(0, self.busy - 1)
+        if self.busy == 0:
+            self.bezig_sinds = None
+        self.last_used = time.time()
+
+    def te_lang_bezig(self) -> float:
+        """Hoeveel seconden is deze kern al bezig (0 als hij vrij is)."""
+        if self.busy and self.bezig_sinds:
+            return time.time() - self.bezig_sinds
+        return 0.0
+
+    def hard_stop(self, reden: str = "herstel") -> None:
+        """Breek het rekenen hard af.
+
+        Nodig omdat llama-server een weggevallen client niet opmerkt tijdens het
+        verwerken van een grote prompt: hij rekent dan minutenlang door voor
+        niemand, en met één rekenvak wacht elke volgende vraag daarop. Alleen de
+        kern stoppen maakt het slot echt vrij."""
+        with self.lock:
+            if self.proc and self.proc.poll() is None:
+                sys.stderr.write(f"[wllm] rekenkern gestopt: {reden}\n")
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+            self.ready = False
+            self.busy = 0
+            self.bezig_sinds = None
 
     def stop(self) -> None:
         with self.lock:
@@ -1270,9 +1319,9 @@ def options_to_params(opts: dict) -> dict:
     return out
 
 
-def engine_stream(eng: Engine, payload: dict):
+def engine_stream(eng: Engine, payload: dict, klant=None):
     """Genereer SSE-chunks van llama-server als dicts."""
-    eng.busy += 1
+    eng.begin()
     try:
         req = urllib.request.Request(
             eng.base + "/v1/chat/completions",
@@ -1280,20 +1329,27 @@ def engine_stream(eng: Engine, payload: dict):
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT) as resp:
-            for raw in resp:
-                line = raw.decode("utf-8", "replace").strip()
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    yield json.loads(data)
-                except json.JSONDecodeError:
-                    continue
+            klaar = threading.Event()
+            if klant is not None:
+                threading.Thread(
+                    target=_bewaak_klant, args=(klant, resp, klaar, eng), daemon=True
+                ).start()
+            try:
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        yield json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+            finally:
+                klaar.set()
     finally:
-        eng.busy -= 1
-        eng.last_used = time.time()
+        eng.eindig()
 
 
 def _klant_weg(verbinding) -> bool:
@@ -1312,7 +1368,7 @@ def _klant_weg(verbinding) -> bool:
         return True
 
 
-def _bewaak_klant(verbinding, resp, klaar: threading.Event):
+def _bewaak_klant(verbinding, resp, klaar: threading.Event, eng: "Engine | None" = None):
     """Breek het rekenen af zodra de vragende partij wegvalt.
 
     Zonder dit blijft een weggevallen verzoek doorrekenen: een agent die zijn
@@ -1325,13 +1381,20 @@ def _bewaak_klant(verbinding, resp, klaar: threading.Event):
                 resp.close()
             except Exception:  # noqa: BLE001
                 pass
+            # De verbinding sluiten breekt een lopende generatie af. Tijdens het
+            # verwerken van een grote prompt merkt de kern dat niet, dus wachten we
+            # kort en stoppen hem daarna -- anders blijft het enige rekenvak bezet.
+            if klaar.wait(HERSTEL_NA):
+                return
+            if eng is not None:
+                eng.hard_stop("weggevallen client")
             return
 
 
 def engine_once(eng: Engine, payload: dict, klant=None) -> dict:
     p = dict(payload)
     p["stream"] = False
-    eng.busy += 1
+    eng.begin()
     try:
         req = urllib.request.Request(
             eng.base + "/v1/chat/completions",
@@ -1342,7 +1405,7 @@ def engine_once(eng: Engine, payload: dict, klant=None) -> dict:
         klaar = threading.Event()
         if klant is not None:
             threading.Thread(
-                target=_bewaak_klant, args=(klant, resp, klaar), daemon=True
+                target=_bewaak_klant, args=(klant, resp, klaar, eng), daemon=True
             ).start()
         try:
             return json.load(resp)
@@ -1350,8 +1413,7 @@ def engine_once(eng: Engine, payload: dict, klant=None) -> dict:
             klaar.set()
             resp.close()
     finally:
-        eng.busy -= 1
-        eng.last_used = time.time()
+        eng.eindig()
 
 
 # --------------------------------------------------------------------------- #
@@ -1464,6 +1526,7 @@ class Handler(BaseHTTPRequestHandler):
             "<div><div class=\"naam\">Werdens Media LLM</div>"
             "<div class=\"sub\">Werdens Media · engine</div></div></div>"
             f"<div class=\"kop-rechts\">"
+            "<button class=\"knop\" id=\"herstel\" type=\"button\">Herstel</button>"
             "<a class=\"knop primair\" href=\"/chat\">Chatten</a>"
             f"<span>poort {PORT} · Ollama- en OpenAI-API</span></div>"
             "</header><main>"
@@ -1499,6 +1562,19 @@ class Handler(BaseHTTPRequestHandler):
             "<dt>Werkruimte</dt><dd>documenten met bronvermelding — poort 8090</dd>"
             "<dt>Media</dt><dd>spraak naar tekst en spraak uit — poort 8091</dd>"
             "</dl></div></div>"
+            "<script>"
+            "var h = document.getElementById('herstel');"
+            "if (h) { h.addEventListener('click', function () {"
+            "  h.disabled = true; h.textContent = 'bezig';"
+            "  fetch('/api/herstel', { method: 'POST' })"
+            "    .then(function (r) { return r.json(); })"
+            "    .then(function (d) {"
+            "      h.textContent = d.gestopt ? 'opgeruimd (' + d.gestopt + ')' : 'niets te herstellen';"
+            "      setTimeout(function () { h.disabled = false; h.textContent = 'Herstel'; }, 4000);"
+            "    })"
+            "    .catch(function () { h.textContent = 'mislukt'; h.disabled = false; });"
+            "}); }"
+            "</script>"
             "</main><footer>Werdens Media LLM · eigen code, alle rechten voorbehouden · "
             "gebruikte onderdelen van derden houden hun eigen licentie</footer>"
             "</body></html>"
@@ -1527,6 +1603,19 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return False
 
+    def _herstel(self):
+        """Maak het rekenvak vrij zonder in de container te hoeven.
+
+        Een verzoek dat blijft hangen (een client die wegvalt tijdens het
+        verwerken van een grote prompt) houdt het enige rekenvak bezet. Met deze
+        route stop je de rekenkernen en begint schoon."""
+        gestopt = 0
+        for e in ENGINES.loaded():
+            e.hard_stop("herstel gevraagd")
+            gestopt += 1
+        _ruim_achterblijvers_op()
+        return self._json({"hersteld": True, "gestopt": gestopt})
+
     # -- routing -----------------------------------------------------------
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -1542,6 +1631,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"version": VERSION})
         if path == "/api/tags":
             return self._json({"models": STORE.list_models()})
+        if path == "/api/herstel":
+            return self._herstel()
         if path == "/api/ps":
             return self._json({"models": [e.info() for e in ENGINES.loaded()]})
         if path == "/v1/models":
@@ -1591,6 +1682,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split("?")[0]
         try:
+            if path == "/api/herstel":
+                return self._herstel()
             if path == "/api/show":
                 return self._show()
             if path == "/api/pull":
@@ -1691,6 +1784,25 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"status": "success"})
 
     # -- genereren ---------------------------------------------------------
+    def _gereed(self, b: dict):
+        """Bereid een verzoek voor, of weiger het eerlijk.
+
+        Staat er al te lang een verzoek op de rekenkern te wachten, dan is een
+        antwoord binnen seconden beter dan een half uur wachten zonder uitleg."""
+        eng, msgs, payload = self._prepare(b)
+        wacht = eng.te_lang_bezig()
+        if wacht > WACHT_LIMIET:
+            self._json(
+                {
+                    "error": f"De rekenkern is al {int(wacht)} seconden bezig met een "
+                    "ander verzoek. Probeer het opnieuw, of gebruik Herstel op de "
+                    "statuspagina."
+                },
+                503,
+            )
+            return None
+        return eng, msgs, payload
+
     def _prepare(self, b: dict) -> tuple[Engine, list[dict], dict]:
         name = b.get("model") or b.get("name")
         if not name:
@@ -1718,7 +1830,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _chat(self):
         b = self._body()
-        eng, _msgs, payload = self._prepare(b)
+        klaar = self._gereed(b)
+        if klaar is None:
+            return
+        eng, _msgs, payload = klaar
         stream = payload["stream"]
         t0 = time.time()
         if not stream:
@@ -1747,7 +1862,7 @@ class Handler(BaseHTTPRequestHandler):
             )
         self._stream_start()
         usage, finish = {}, "stop"
-        for chunk in engine_stream(eng, payload):
+        for chunk in engine_stream(eng, payload, self.connection):
             if chunk.get("usage"):
                 usage = chunk["usage"]
             for ch in chunk.get("choices") or []:
@@ -1790,7 +1905,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _generate(self):
         b = self._body()
-        eng, _msgs, payload = self._prepare(b)
+        klaar = self._gereed(b)
+        if klaar is None:
+            return
+        eng, _msgs, payload = klaar
         stream = payload["stream"]
         t0 = time.time()
         if not stream:
@@ -1814,7 +1932,7 @@ class Handler(BaseHTTPRequestHandler):
             )
         self._stream_start()
         usage, finish = {}, "stop"
-        for chunk in engine_stream(eng, payload):
+        for chunk in engine_stream(eng, payload, self.connection):
             if chunk.get("usage"):
                 usage = chunk["usage"]
             for ch in chunk.get("choices") or []:
@@ -1880,7 +1998,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
             self.end_headers()
-            for chunk in engine_stream(eng, payload):
+            for chunk in engine_stream(eng, payload, self.connection):
                 try:
                     self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
                     self.wfile.flush()

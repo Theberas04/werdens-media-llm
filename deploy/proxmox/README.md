@@ -125,6 +125,8 @@ helft of minder van wat een vergelijkbare x86-machine doet.
 | `WLLM_CTX` | `65536` | contextvenster (Hermes eist minimaal 64000) |
 | `WLLM_THREADS` | `0` (automatisch) | rekenkracht-threads; `0` laat de engine zelf kijken wat de machine aankan |
 | `WLLM_UPSTREAM_TIMEOUT` | `1800` | seconden die de engine op de rekenkern wacht; op een cpu mag één lange vraag rustig een kwartier duren |
+| `WLLM_HERSTEL_NA` | `20` | seconden die de rekenkern nog mag doorwerken nadat de vragende partij wegviel; daarna stopt de engine hem, zodat het enige rekenvak vrijkomt |
+| `WLLM_WACHT_LIMIET` | `900` | een verzoek dat langer dan dit achter een ander verzoek staat, krijgt een 503 met uitleg in plaats van een half uur wachten |
 
 Voorbeeld met een vast adres en meer rekenkracht:
 
