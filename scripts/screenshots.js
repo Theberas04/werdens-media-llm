@@ -156,6 +156,43 @@ async function haalDoel(poort) {
   await wacht(500);
   await schiet('laag-3-media');
 
+  // 5. Spraak uit met een echt resultaat: op de knop drukken en wachten tot het
+  //    audiobestand klaar is, zodat de speler en de tekst in beeld staan.
+  console.log('spraak uit proberen (Piper)');
+  await js(`(() => { const b = document.querySelector('#spreek'); if (b) b.click(); return true; })()`);
+  let s2 = '';
+  for (let i = 0; i < 40; i++) {
+    await wacht(700);
+    s2 = await js(`(() => { const e = document.querySelector('#s2'); return e ? e.innerText : ''; })()`);
+    if (s2 && /klaar|seconden|gesproken/i.test(s2)) break;
+  }
+  console.log(`  status: ${s2.slice(0, 70)}`);
+  await wacht(600);
+  await schiet('laag-3-spraak');
+
+  // 6. De embed-widget op een gewone website (docs/embed-voorbeeld.html).
+  console.log('embed-widget');
+  const voorbeeld = path.join(__dirname, '..', 'docs', 'embed-voorbeeld.html');
+  await ga('file://' + voorbeeld, 2500);
+  await js(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => /assistent/i.test(x.textContent));
+    if (b) b.click();
+    return true;
+  })()`);
+  await wacht(3500);
+  await schiet('embed-widget');
+
+  // 7. De werkruimte op een telefoon (het dashboard is mobiel-eerste).
+  console.log('werkruimte op mobiel (390x844)');
+  await stuur('Emulation.setDeviceMetricsOverride', {
+    width: 390, height: 844, deviceScaleFactor: 2, mobile: true,
+  });
+  await ga(`${BASIS}:8090/`, 3000);
+  await js(`(() => { if (typeof kies === 'function') kies(${JSON.stringify(WERKRUIMTE)}); return true; })()`);
+  await wacht(2000);
+  await schiet('mobiel-werkruimte');
+  await stuur('Emulation.clearDeviceMetricsOverride');
+
   ws.close();
   chrome.kill('SIGKILL');
   // Het profiel opruimen mag nooit de hele run laten mislukken.

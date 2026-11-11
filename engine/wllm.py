@@ -1026,6 +1026,13 @@ class Handler(BaseHTTPRequestHandler):
             ".tabel .naam{font-family:var(--mono);color:var(--accent-d);font-weight:600}"
             ".grijs{color:var(--muted2)}"
             "footer{padding:0 26px 34px;color:var(--muted2);font-size:13px}"
+            # Op een telefoon passen de labels niet naast de waarden.
+            "@media(max-width:640px){"
+            "main{padding:16px 16px 30px}"
+            "dl{grid-template-columns:1fr;gap:2px}dt{margin-top:8px}"
+            "header.kop{flex-wrap:wrap;gap:8px}"
+            ".kop-rechts{margin-left:0;width:100%}"
+            ".kaart-body{padding:14px}}"
             "</style></head><body>"
             "<header class=\"kop\"><div class=\"merk\">"
             "<span class=\"logo\"><img src=\"/logo.png\" alt=\"Werdens Media\" "

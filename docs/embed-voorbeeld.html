@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voorbeeldpagina met de Werdens Media LLM-widget</title>
+<style>
+  :root{
+    --bg:#f4f7fb; --pane:#ffffff; --line:#e3eaf4; --line2:#cfdaeb;
+    --txt:#0f172a; --muted:#55657f; --muted2:#8296ae;
+    --accent:#2ea3f2; --accent-d:#1e73be;
+    --merk:linear-gradient(118deg,#5ff0e8 0%,#2ea3f2 55%,#1e73be 100%);
+    --r:16px; --schaduw:0 1px 2px rgba(15,23,42,.05),0 12px 28px -20px rgba(15,23,42,.3);
+    --font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;color:var(--txt);font:15px/1.5 var(--font);
+    background:radial-gradient(1100px 520px at 90% -10%,rgba(95,240,232,.12),transparent 62%),
+               radial-gradient(900px 480px at -8% -4%,rgba(74,76,248,.08),transparent 58%),var(--bg)}
+  header.kop{display:flex;align-items:center;gap:11px;padding:14px 26px;background:rgba(255,255,255,.88);
+    border-bottom:1px solid var(--line)}
+  .logo{width:40px;height:40px}
+  .logo img{width:100%;height:100%;object-fit:contain;display:block}
+  .naam{font-weight:700;font-size:17px;letter-spacing:-.025em}
+  .sub{font-size:11.5px;color:var(--muted2);letter-spacing:.08em;text-transform:uppercase}
+  nav{margin-left:auto;display:flex;gap:18px;font-size:14px;color:var(--muted)}
+  main{max-width:900px;margin:0 auto;padding:44px 26px 90px}
+  h1{font-size:34px;letter-spacing:-.03em;margin:0 0 10px}
+  .streep{height:3px;width:64px;border-radius:3px;background:var(--merk);margin:0 0 22px}
+  p{color:var(--muted);max-width:62ch}
+  .kaarten{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:26px}
+  .kaart{background:var(--pane);border:1px solid var(--line);border-radius:var(--r);
+    box-shadow:var(--schaduw);padding:16px 18px}
+  .kaart h2{margin:0 0 6px;font-size:15px}
+  .kaart p{margin:0;font-size:13px}
+</style>
+</head>
+<body>
+<header class="kop">
+  <span class="logo"><img src="../assets/werdens-media-logo.png" alt="Werdens Media"></span>
+  <div><div class="naam">Mijn website</div><div class="sub">voorbeeldpagina</div></div>
+  <nav><span>Home</span><span>Diensten</span><span>Contact</span></nav>
+</header>
+<main>
+  <h1>Een eigen website</h1>
+  <div class="streep"></div>
+  <p>Deze pagina doet alsof hij van jou is. Onderaan rechts hangt de widget van de
+     Werdens Media LLM: één regel script en je bezoekers kunnen vragen stellen die
+     met jouw eigen documenten worden beantwoord, met de bronnen erbij.</p>
+  <div class="kaarten">
+    <div class="kaart"><h2>Eigen documenten</h2><p>Antwoorden komen uit jouw teksten, niet uit het hoofd van een model.</p></div>
+    <div class="kaart"><h2>Met bronvermelding</h2><p>Onder elk antwoord staat welk fragment is gebruikt.</p></div>
+    <div class="kaart"><h2>Alles lokaal</h2><p>Geen abonnement, geen tokenkosten, geen gegevens naar buiten.</p></div>
+  </div>
+</main>
+
+<!-- Eén regel: hier komt de widget van de Werdens Media LLM. -->
+<script src="http://127.0.0.1:8090/widget.js"
+        data-werkruimte="werdens-media-llm" data-kleur="#2ea3f2"></script>
+</body>
+</html>

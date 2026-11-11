@@ -684,6 +684,16 @@ PAGINA = """<!doctype html>
   .fragment{font-size:13px;color:var(--muted);white-space:normal;max-height:150px;overflow:hidden}
   .fragment p{margin:0 0 5px}
   .fragment pre{max-height:80px}
+  /* Op een telefoon: één kolom en een rustige kop, zoals in Werdens Monitor. */
+  @media(max-width:820px){
+    main{grid-template-columns:1fr}
+    aside{border-right:0;border-bottom:1px solid var(--line)}
+    section{padding:14px 16px}
+    header.kop{flex-wrap:wrap;gap:8px}
+    .merk .sub{display:none}
+    .kop-rechts{margin-left:0;width:100%}
+    .msg{max-width:100%}
+  }
 </style></head><body>
 <header class="kop">
   <div class="merk">

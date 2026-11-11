@@ -48,10 +48,25 @@ En het antwoord, met de bronnen eronder en de score per bron:
 
 ![Antwoord met bronvermelding](docs/img/laag-2-antwoord.png)
 
+Op een telefoon klapt hetzelfde scherm naar één kolom:
+
+![De werkruimte op een telefoon](docs/img/mobiel-werkruimte.png)
+
 **De medialaag** (poort 8091) — spraak naar tekst en spraak uit met een
 Nederlandse stem:
 
 ![De medialaag](docs/img/laag-3-media.png)
+
+En hier is echt iets voorgelezen: 7,5 seconden spraak in 0,92 seconden — acht keer
+sneller dan realtime, op de CPU.
+
+![Spraak uit met Piper](docs/img/laag-3-spraak.png)
+
+**De embed-widget** — één regel script op je eigen site, met antwoorden uit jouw
+documenten en de bronnen erbij. Een werkende voorbeeldpagina staat in
+`docs/embed-voorbeeld.html`.
+
+![De embed-widget op een gewone website](docs/img/embed-widget.png)
 
 **Een rondleiding in beeld** (echte opname, inclusief de wachttijd op een
 antwoord — op een CPU duurt dat ongeveer anderhalve minuut):
