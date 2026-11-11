@@ -26,6 +26,13 @@ GEBRUIKER="${GEBRUIKER:-wmlm}"
 WHISPER_TAG="${WHISPER_TAG:-b5454}"
 WHISPER_MODEL_FILE="${WMLM_WHISPER_MODEL_FILE:-ggml-small.bin}"
 PIPER_TAG="${PIPER_TAG:-2023.11.14-2}"
+# De kant-en-klare builds van whisper.cpp en Piper bestaan voor x86-64 en arm64.
+ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
+case "$ARCH" in
+  amd64) WHISPER_ARCH="${WHISPER_ARCH:-x64}";   PIPER_ARCH="${PIPER_ARCH:-x86_64}" ;;
+  arm64) WHISPER_ARCH="${WHISPER_ARCH:-arm64}"; PIPER_ARCH="${PIPER_ARCH:-aarch64}" ;;
+  *) printf '\033[1;31m[fout]\033[0m Onbekende architectuur %s. Deze kit is er voor amd64 en arm64.\n' "$ARCH" >&2; exit 1 ;;
+esac
 STEM="${WMLM_STEM:-nl_NL-mls-medium}"
 STEM_PAD="${WMLM_STEM_PAD:-nl/nl_NL/mls/medium}"
 POORT="${WMLM_MEDIA_PORT:-8091}"
@@ -58,7 +65,7 @@ binnen mkdir -p "$TARGET/media/bin" "$TARGET/media/models" "$TARGET/media/voices
 log "3/5 whisper.cpp ophalen (tag $WHISPER_TAG) en het model $WHISPER_MODEL_FILE"
 if ! binnen test -x "$TARGET/media/bin/whisper/whisper-cli"; then
   binnen_bash "cd $TARGET/media/bin && curl -fsSL --retry 3 -o whisper.tar.gz \
-    https://github.com/ggml-org/whisper.cpp/releases/download/$WHISPER_TAG/whisper-bin-ubuntu-x64.tar.gz \
+    https://github.com/ggml-org/whisper.cpp/releases/download/$WHISPER_TAG/whisper-bin-ubuntu-$WHISPER_ARCH.tar.gz \
     && mkdir -p whisper && tar xzf whisper.tar.gz -C whisper && rm -f whisper.tar.gz" \
     || die "whisper.cpp downloaden mislukte. Bestaat tag $WHISPER_TAG nog? Zet WHISPER_TAG=... naar een bestaande build."
 fi
@@ -73,7 +80,7 @@ fi
 log "4/5 Piper en de Nederlandse stem $STEM ophalen"
 if ! binnen test -x "$TARGET/media/bin/piper/piper"; then
   binnen_bash "cd $TARGET/media/bin && curl -fsSL --retry 3 -o piper.tar.gz \
-    https://github.com/rhasspy/piper/releases/download/$PIPER_TAG/piper_linux_x86_64.tar.gz \
+    https://github.com/rhasspy/piper/releases/download/$PIPER_TAG/piper_linux_$PIPER_ARCH.tar.gz \
     && tar xzf piper.tar.gz && rm -f piper.tar.gz" \
     || die "Piper downloaden mislukte."
 fi

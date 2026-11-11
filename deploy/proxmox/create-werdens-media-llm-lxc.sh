@@ -10,19 +10,10 @@ set -euo pipefail
 
 CTID="${CTID:-}"
 CT_HOSTNAME="${CT_HOSTNAME:-werdens-media-llm}"
-# Niet elke host heeft 'local' en 'local-lvm' (een ZFS-host heeft bijvoorbeeld
-# local-zfs). Kies daarom zelf een opslag die actief is en ruimte heeft; een
-# verkeerde keuze merk je pas bij het starten, als de template er niet in past.
-if [ -z "${TEMPLATE_STORAGE:-}" ]; then
-  TEMPLATE_STORAGE="$(pvesm status --content vztmpl 2>/dev/null \
-    | awk 'NR>1 && $3=="active" {print $6, $1}' | sort -rn | head -1 | awk '{print $2}')"
-fi
-TEMPLATE_STORAGE="${TEMPLATE_STORAGE:-local}"
-if [ -z "${ROOTFS_STORAGE:-}" ]; then
-  ROOTFS_STORAGE="$(pvesm status --content rootdir 2>/dev/null \
-    | awk 'NR>1 && $3=="active" {print $6, $1}' | sort -rn | head -1 | awk '{print $2}')"
-fi
-ROOTFS_STORAGE="${ROOTFS_STORAGE:-local-lvm}"
+# Architectuur en opslag worden hieronder bepaald (zie 'Opslag kiezen').
+ARCH="${ARCH:-$(dpkg --print-architecture 2>/dev/null || echo amd64)}"
+TEMPLATE_STORAGE="${TEMPLATE_STORAGE:-}"
+ROOTFS_STORAGE="${ROOTFS_STORAGE:-}"
 BRIDGE="${BRIDGE:-vmbr0}"
 STATIC_IP="${STATIC_IP:-}"
 GATEWAY="${GATEWAY:-}"
@@ -35,6 +26,7 @@ MEMORY="${MEMORY:-12288}"
 SWAP="${SWAP:-2048}"
 DISK="${DISK:-60}"
 DEBIAN_MAJOR="${DEBIAN_MAJOR:-13}"
+TARGET="${TARGET:-/opt/werdens-media-llm}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
@@ -51,6 +43,65 @@ for f in "$APP_DIR/engine/wllm.py" "$APP_DIR/assets/werdens-media-logo.png" \
 done
 ip link show "$BRIDGE" >/dev/null 2>&1 || die "Bridge '$BRIDGE' bestaat niet."
 
+case "$ARCH" in
+  amd64) ARCH_NAAM="x86-64" ;;
+  arm64) ARCH_NAAM="arm64"  ;;
+  *) die "Onbekende architectuur '$ARCH'. Deze kit is er voor amd64 (Intel/AMD) en arm64." ;;
+esac
+log "Host: $ARCH ($ARCH_NAAM)"
+
+# --- Opslag kiezen -----------------------------------------------------------
+# Een NAS als opslag klinkt logisch, maar root mag daar vaak niet schrijven
+# (root_squash): dan mislukt het downloaden van de template en het maken van de
+# schijf met 'Permission denied'. Daarom eerst lokale opslag, en we proeven of
+# root er echt mag schrijven voordat we er iets op zetten.
+opslag_kandidaten(){
+  # Lokale opslag eerst (1 = blokopslag, 2 = map), netwerkopslag achteraan;
+  # binnen een soort de opslag met de meeste ruimte vooraan.
+  pvesm status --content "$1" 2>/dev/null | awk 'NR>1 && $3=="active"{
+      t=$2
+      p = (t=="lvmthin" || t=="zfspool" || t=="btrfs") ? 1 : (t=="lvm" || t=="dir") ? 2 : 3
+      printf "%d %019d %s\n", p, 999999999999999999-$6, $1
+    }' | sort | awk '{print $3}'
+}
+opslag_pad(){
+  local s="$1" t pad
+  t="$(pvesm status 2>/dev/null | awk -v s="$s" 'NR>1 && $1==s{print $2}')"
+  pad="$(awk -v s="$s" '$1 ~ /:$/ {naam=$2} naam==s && $1=="path" {print $2; exit}' \
+    /etc/pve/storage.cfg 2>/dev/null)"
+  if [ -z "$pad" ]; then
+    case "$t" in nfs|cifs|glusterfs) pad="/mnt/pve/$s" ;; esac
+  fi
+  printf '%s' "$pad"
+}
+opslag_schrijfbaar(){
+  local pad; pad="$(opslag_pad "$1")"
+  [ -n "$pad" ] || return 0                  # blokopslag heeft geen pad
+  [ -d "$pad" ] || return 1
+  local proef="$pad/.wmlm-schrijfproef.$$"
+  touch "$proef" 2>/dev/null || return 1
+  rm -f "$proef"; return 0
+}
+kies_opslag(){
+  local content="$1" k
+  for k in $(opslag_kandidaten "$content"); do
+    if opslag_schrijfbaar "$k"; then printf '%s' "$k"; return 0; fi
+    warn "Opslag '$k' is niet beschrijfbaar door root (bijvoorbeeld een NAS met root_squash); ik sla die over."
+  done
+  return 1
+}
+
+if [ -z "$ROOTFS_STORAGE" ]; then
+  ROOTFS_STORAGE="$(kies_opslag rootdir)" || die "Geen beschrijfbare opslag gevonden voor de schijf van de container.
+Kijk zelf met: pvesm status --content rootdir
+Wijs er een aan met: ROOTFS_STORAGE=<naam> ...
+Staat je opslag op een NAS, zet die export dan op 'no_root_squash' of gebruik lokale opslag."
+fi
+if [ -z "$TEMPLATE_STORAGE" ]; then
+  TEMPLATE_STORAGE="$(kies_opslag vztmpl)" || TEMPLATE_STORAGE="local"
+fi
+log "Schijf op '$ROOTFS_STORAGE', template op '$TEMPLATE_STORAGE'"
+
 if [ -n "$STATIC_IP" ]; then
   [ -n "$GATEWAY" ] || die "Geef GATEWAY op bij STATIC_IP."
   NET0="name=eth0,bridge=$BRIDGE,ip=$STATIC_IP,gw=$GATEWAY,type=veth"
@@ -64,8 +115,22 @@ pct status "$CTID" >/dev/null 2>&1 && die "Container $CTID bestaat al."
 
 log "Debian $DEBIAN_MAJOR-template zoeken…"
 pveam update >/dev/null 2>&1 || warn "pveam update mislukte; lokale template-lijst wordt gebruikt."
-TEMPLATE=$(pveam available --section system 2>/dev/null | awk '{print $NF}' | grep -E "^debian-${DEBIAN_MAJOR}-standard_.*\.tar" | sort -V | tail -1)
-[ -n "$TEMPLATE" ] || die "Geen Debian $DEBIAN_MAJOR-template gevonden. Controleer: pveam available --section system"
+# Let op: de lijst bevat templates voor meerdere architecturen (amd64 én arm64).
+# Zonder filter pakt 'sort -V | tail -1' de arm64-versie, en dan start de
+# container niet: het is een rootfs voor een andere processor.
+TEMPLATE=$(pveam available --section system 2>/dev/null | awk '{print $NF}' \
+  | grep -E "^debian-${DEBIAN_MAJOR}-standard_.*_${ARCH}\.tar" | sort -V | tail -1)
+if [ -z "$TEMPLATE" ]; then
+  TEMPLATE=$(pveam available --section system 2>/dev/null | awk '{print $NF}' \
+    | grep -E "^debian-${DEBIAN_MAJOR}-standard_.*\.tar" | sort -V | tail -1)
+  [ -n "$TEMPLATE" ] || die "Geen Debian $DEBIAN_MAJOR-template gevonden. Controleer: pveam available --section system"
+  warn "Geen Debian $DEBIAN_MAJOR-template voor $ARCH in de lijst; ik gebruik $TEMPLATE."
+fi
+case "$TEMPLATE" in
+  *_${ARCH}.tar*) : ;;
+  *) die "Template $TEMPLATE hoort niet bij $ARCH. Zo'n container start niet.
+Kijk zelf met: pveam available --section system | grep debian-${DEBIAN_MAJOR}" ;;
+esac
 if ! pvesm list "$TEMPLATE_STORAGE" --content vztmpl 2>/dev/null | grep -q "$TEMPLATE"; then
   pveam download "$TEMPLATE_STORAGE" "$TEMPLATE" || die "Template downloaden mislukte."
 fi

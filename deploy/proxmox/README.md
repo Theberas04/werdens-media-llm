@@ -69,20 +69,41 @@ Dat probeert het nog één keer met volledige uitleg, zoekt de bekende oorzaken 
 print in gewone taal wat je moet doen. Zonder `CTID=` zoekt het zelf de container
 met de hostnaam `werdens-media-llm`.
 
-De drie die het vaakst voorkomen:
+De vier die het vaakst voorkomen:
 
-1. **De schijf van de container is leeg** (`Failed to exec "/sbin/init"`, `/etc not
+1. **De template is voor een andere processor.** Proxmox 9 zet in de templatelijst
+   zowel `amd64` als `arm64`-bestanden. Zonder filter pakt een keuze op naam de
+   arm64-versie, en dan wordt de container wél aangemaakt maar start hij niet: de
+   rootfs is voor een andere processor (`Failed to spawn container`, in de
+   volledige log `Failed to exec "/sbin/init"`). Het maakscript filtert nu op de
+   architectuur van de host en weigert een template die er niet bij hoort.
+2. **De schijf van de container is leeg** (`Failed to exec "/sbin/init"`, `/etc not
    present in CT`). De container is aangemaakt, maar de template is er niet in
    gekomen. Meestal door de gekozen opslag. Het maakscript kiest die nu zelf (de
    actieve opslag met de meeste ruimte) in plaats van blind `local-lvm`; met
    `ROOTFS_STORAGE=` wijs je er zelf een aan. Daarna: `pct destroy <CTID>` en
    opnieuw installeren.
-2. **De host houdt het tegen** (`Failed to clone a new set of namespaces`, `Failed
+3. **De host houdt het tegen** (`Failed to clone a new set of namespaces`, `Failed
    to mount "proc"`, `Failed to load bpf program`). Dan faalt élke container op die
    machine, meestal na een kernel- of lxc-update: `apt-get install -y --reinstall
    lxc-pve apparmor && systemctl restart apparmor`, of de host herstarten.
-3. **De opslag geeft een symlink-pad** (`symlink encountered`). Bekende fout met
+4. **De opslag geeft een symlink-pad** (`symlink encountered`). Bekende fout met
    iSCSI-/LVM-opslag in Proxmox 9. Kies een andere opslag voor de schijf.
+
+## Opslag en architectuur
+
+Het maakscript kiest de opslag zelf en zet **lokale opslag vóór netwerkopslag**. Dat
+is niet voor de snelheid: op een NAS mag root vaak niet schrijven (`root_squash`),
+en dan mislukt het ophalen van de template en het maken van de schijf met
+`Permission denied`. Voor het kiezen proeft het script of root er echt mag
+schrijven; is geen enkele opslag beschrijfbaar, dan stopt het met uitleg in plaats
+van halverwege. Wil je de NAS toch gebruiken, zet die export dan op
+`no_root_squash`, of wijs hem aan met `ROOTFS_STORAGE=` en `TEMPLATE_STORAGE=`.
+
+De kit werkt op **amd64 (Intel/AMD) en arm64**. De kant-en-klare builds van
+llama.cpp, whisper.cpp en Piper bestaan voor allebei; het script kiest de juiste op
+basis van `dpkg --print-architecture`. Op arm64 is rekenen trager — reken op de
+helft of minder van wat een vergelijkbare x86-machine doet.
 
 ## Instellingen (env-variabelen)
 

@@ -24,6 +24,14 @@ TARGET="${TARGET:-/opt/werdens-media-llm}"
 DIENST="${DIENST:-werdens-media-llm}"
 GEBRUIKER="${GEBRUIKER:-wmlm}"
 LLAMA_TAG="${LLAMA_TAG:-b12262}"
+# De kant-en-klare build van llama.cpp bestaat voor x86-64 en voor arm64; de
+# container heeft dezelfde architectuur als de host, dus daar kijken we.
+ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
+case "$ARCH" in
+  amd64) LLAMA_ARCH="${LLAMA_ARCH:-x64}" ;;
+  arm64) LLAMA_ARCH="${LLAMA_ARCH:-arm64}" ;;
+  *) printf '\033[1;31m[fout]\033[0m Onbekende architectuur %s. Deze kit is er voor amd64 en arm64.\n' "$ARCH" >&2; exit 1 ;;
+esac
 # Laat het chatmodel standaard LEEG: dan kiezen we het grootste model dat op
 # deze container past, door het de engine zelf te laten uitrekenen (gemeten
 # architectuur uit de GGUF-kop, plus de KV-cache bij het ingestelde
@@ -62,7 +70,7 @@ binnen mkdir -p "$TARGET/engine" "$TARGET/models" "$TARGET/data" "$TARGET/logs"
 
 log "3/7 llama.cpp-engine ophalen (tag $LLAMA_TAG, voorgebouwde binary)"
 if ! binnen test -x "$TARGET/engine/llama-$LLAMA_TAG/llama-server"; then
-  binnen_bash "cd $TARGET/engine && curl -fsSL --retry 3 -o llama.tar.gz https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_TAG/llama-$LLAMA_TAG-bin-ubuntu-x64.tar.gz && tar xzf llama.tar.gz && rm -f llama.tar.gz" \
+  binnen_bash "cd $TARGET/engine && curl -fsSL --retry 3 -o llama.tar.gz https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_TAG/llama-$LLAMA_TAG-bin-ubuntu-$LLAMA_ARCH.tar.gz && tar xzf llama.tar.gz && rm -f llama.tar.gz" \
     || die "Engine downloaden mislukte. Bestaat tag $LLAMA_TAG nog? Zet LLAMA_TAG=... naar een bestaande build."
 fi
 binnen test -x "$TARGET/engine/llama-$LLAMA_TAG/llama-server" || die "llama-server niet uitvoerbaar na uitpakken."
