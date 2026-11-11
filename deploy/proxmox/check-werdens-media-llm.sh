@@ -67,6 +67,24 @@ else
   echo 'geen model gevonden; haal er een met: pct exec '"$CTID"' -- python3 '"$TARGET"'/wllm.py pull hf:<repo>/<bestand>.gguf'
 fi
 
+kop "8. Werkruimtelaag (documenten met bronvermelding)"
+WK_DIENST="$DIENST-werkruimte"
+WK_POORT="${WMLM_WERKRUIMTE_PORT:-8090}"
+printf 'dienst:            '; binnen systemctl is-active "$WK_DIENST"
+printf 'antwoordt?         '; binnen_bash "curl -fsS --max-time 5 http://127.0.0.1:$WK_POORT/health" || echo 'nee'
+printf 'werkruimtes:\n'; binnen_bash "curl -fsS --max-time 5 http://127.0.0.1:$WK_POORT/api/workspaces | jq -r '.workspaces[] | \"    \\(.slug) — \\(.documenten) documenten, \\(.brokken) brokken\"' 2>/dev/null" || echo '    geen'
+printf 'database:          '; binnen_bash "du -h $TARGET/data/werkruimte.db 2>/dev/null || echo 'nog geen database'"
+
+kop "9. Medialaag (spraak naar tekst en spraak uit)"
+MD_DIENST="$DIENST-media"
+MD_POORT="${WMLM_MEDIA_PORT:-8091}"
+printf 'dienst:            '; binnen systemctl is-active "$MD_DIENST"
+printf 'antwoordt?         '; binnen_bash "curl -fsS --max-time 5 http://127.0.0.1:$MD_POORT/health | jq -c '{whisper:.whisper.klaar,piper:.piper.klaar,stemmen:.piper.stemmen,ffmpeg}'" || echo 'nee'
+printf 'spraak uit proberen:\n'
+binnen_bash "curl -fsS --max-time 120 http://127.0.0.1:$MD_POORT/v1/audio/speech -d '{\"input\":\"Test van de medialaag.\"}' -o /tmp/proef.wav && ls -lh /tmp/proef.wav | awk '{print \"    \"\$5\" audio geschreven\"}' && curl -fsS --max-time 300 http://127.0.0.1:$MD_POORT/v1/audio/transcriptions -F 'file=@/tmp/proef.wav' | jq -r '\"    teruggehoord: \" + .text'" 2>/dev/null || echo '    proef mislukte'
+
 kop "Samenvatting"
-printf 'De server staat op http://<ip-van-container>:%s\n' "$POORT"
+printf 'engine      : http://<ip-van-container>:%s   (Ollama en OpenAI)\n' "$POORT"
+printf 'werkruimte  : http://<ip-van-container>:%s   (documenten met bronvermelding)\n' "$WK_POORT"
+printf 'media       : http://<ip-van-container>:%s   (spraak naar tekst en spraak uit)\n' "$MD_POORT"
 printf 'Hermes eist minimaal 64000 tokens context; controleer dat hierboven bij "contextvenster".\n'

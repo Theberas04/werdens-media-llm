@@ -8,6 +8,7 @@ Alles hier draai je **als root op de Proxmox-host**, niet in een container.
 | `provision-werdens-media-llm.sh <CTID>` | Richt de stack in binnen een bestaande container (of opnieuw, om te herstellen). |
 | `check-werdens-media-llm.sh <CTID>` | Controle in één keer: container, systeem, dienst, engine, modellen, poort, contextvenster en een echte testvraag. |
 | `update-from-github.sh <CTID>` | Haalt de nieuwste versie van GitHub en draait de inrichting opnieuw. Modellen blijven staan. |
+| `provision-media.sh <CTID>` | Alleen de medialaag: spraak naar tekst (whisper.cpp) en spraak uit (Piper met Nederlandse stemmen). Draait op CPU. |
 
 ## Snel
 
@@ -53,13 +54,25 @@ assistent wil gebruiken.
 
 ```
 /opt/werdens-media-llm/
-├── wllm.py                 de server
-├── config.env              instellingen (systemd leest dit)
-├── engine/llama-<tag>/     de llama.cpp-engine
-├── models/*.gguf           de modellen
-├── logs/                   journaal per model
-└── data/                   gereserveerd voor de werkruimte- en medialaag
+├── wllm.py                      de engine (Ollama- en OpenAI-API, poort 11434)
+├── config.env                   instellingen (systemd leest dit)
+├── engine/llama-<tag>/          de llama.cpp-engine
+├── models/*.gguf                de modellen
+├── logs/                        journaal per model
+├── workspace/wmlm_workspace.py  de werkruimtelaag (poort 8090)
+├── data/werkruimte.db           documenten, brokken en vectoren
+└── media/                       de medialaag (poort 8091)
+    ├── wmlm_media.py
+    ├── bin/whisper/             whisper-cli
+    ├── bin/piper/               piper
+    ├── models/ggml-small.bin    spraakmodel
+    └── voices/nl_NL-*.onnx      Nederlandse stem
 ```
 
-Dienst: `werdens-media-llm.service` (systemd), poort `11434` — dezelfde poort als
-Ollama, zodat bestaande clients meteen werken.
+Drie diensten (systemd):
+
+| Dienst | Poort | Wat |
+|---|---|---|
+| `werdens-media-llm` | 11434 | de engine — dezelfde poort als Ollama, zodat bestaande clients meteen werken |
+| `werdens-media-llm-werkruimte` | 8090 | documenten met bronvermelding, webinterface, embed-widget |
+| `werdens-media-llm-media` | 8091 | spraak naar tekst en spraak uit |

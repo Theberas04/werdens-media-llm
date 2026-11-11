@@ -52,15 +52,15 @@ ready=0
 for _ in $(seq 1 30); do binnen true >/dev/null 2>&1 && { ready=1; break; }; sleep 2; done
 [ "$ready" = 1 ] || die "Container $CTID is niet bereikbaar via pct exec."
 
-log "1/6 Basispakketten installeren"
+log "1/7 Basispakketten installeren"
 binnen_bash 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq python3 curl ca-certificates tar jq procps >/dev/null 2>&1' \
   || die "Pakketten installeren mislukte. Controleer of de container internet heeft."
 
-log "2/6 Gebruiker en mappen aanmaken in $TARGET"
+log "2/7 Gebruiker en mappen aanmaken in $TARGET"
 binnen_bash "id -u $GEBRUIKER >/dev/null 2>&1 || useradd --system --home-dir $TARGET --shell /usr/sbin/nologin $GEBRUIKER"
 binnen mkdir -p "$TARGET/engine" "$TARGET/models" "$TARGET/data" "$TARGET/logs"
 
-log "3/6 llama.cpp-engine ophalen (tag $LLAMA_TAG, voorgebouwde binary)"
+log "3/7 llama.cpp-engine ophalen (tag $LLAMA_TAG, voorgebouwde binary)"
 if ! binnen test -x "$TARGET/engine/llama-$LLAMA_TAG/llama-server"; then
   binnen_bash "cd $TARGET/engine && curl -fsSL --retry 3 -o llama.tar.gz https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_TAG/llama-$LLAMA_TAG-bin-ubuntu-x64.tar.gz && tar xzf llama.tar.gz && rm -f llama.tar.gz" \
     || die "Engine downloaden mislukte. Bestaat tag $LLAMA_TAG nog? Zet LLAMA_TAG=... naar een bestaande build."
@@ -68,7 +68,7 @@ fi
 binnen test -x "$TARGET/engine/llama-$LLAMA_TAG/llama-server" || die "llama-server niet uitvoerbaar na uitpakken."
 log "    engine-versie: $(binnen "$TARGET/engine/llama-$LLAMA_TAG/llama-server" --version 2>&1 | head -1)"
 
-log "4/6 Embeddingmodel downloaden (het chatmodel kiezen we straks op maat)"
+log "4/7 Embeddingmodel downloaden (het chatmodel kiezen we straks op maat)"
 if [ "$SKIP_MODELS" = "1" ]; then
   warn "SKIP_MODELS=1 — modellen overgeslagen. Haal ze later met: pct exec $CTID -- python3 $TARGET/wllm.py pull hf:<repo>/<bestand>.gguf"
 elif ! binnen test -s "$TARGET/models/$EMBED_FILE"; then
@@ -77,7 +77,7 @@ elif ! binnen test -s "$TARGET/models/$EMBED_FILE"; then
     || die "Embeddingmodel downloaden mislukte."
 fi
 
-log "5/6 Server, configuratie en dienst plaatsen"
+log "5/7 Engine, configuratie en dienst plaatsen"
 pct push "$CTID" "$APP_DIR/engine/wllm.py" "$TARGET/wllm.py" --perms 0755
 
 cat > /tmp/wmlm-config.env <<EOF
@@ -124,7 +124,7 @@ rm -f /tmp/wmlm.service
 binnen chown -R "$GEBRUIKER:$GEBRUIKER" "$TARGET"
 binnen_bash "systemctl daemon-reload && systemctl enable $DIENST >/dev/null 2>&1 && systemctl restart $DIENST"
 
-log "6/6 Chatmodel kiezen en ophalen"
+log "6/7 Chatmodel kiezen en ophalen"
 if [ "$SKIP_MODELS" = "1" ]; then
   warn "SKIP_MODELS=1 — chatmodel overgeslagen."
 else
@@ -147,6 +147,56 @@ else
       || warn "Model ophalen mislukte. Probeer later: pct exec $CTID -- python3 $TARGET/wllm.py pull $SPEC"
   fi
 fi
+
+log "7/7 Werkruimtelaag en medialaag plaatsen"
+EMBED_STEM="${EMBED_FILE%.gguf}"
+CHAT_STEM="$(basename "${SPEC:-geen}")"
+CHAT_STEM="${CHAT_STEM%.gguf}"
+[ "$CHAT_STEM" = "geen" ] && CHAT_STEM="$EMBED_STEM"
+
+binnen mkdir -p "$TARGET/workspace"
+pct push "$CTID" "$APP_DIR/workspace/wmlm_workspace.py" "$TARGET/workspace/wmlm_workspace.py" --perms 0755
+cat > /tmp/wmlm-werkruimte.env <<EOF
+WMLM_DATA=$TARGET/data
+WMLM_ENGINE_URL=http://127.0.0.1:$POORT
+WMLM_CHAT_MODEL=$CHAT_STEM
+WMLM_EMBED_MODEL=$EMBED_STEM
+WMLM_HOST=0.0.0.0
+WMLM_PORT=${WMLM_WERKRUIMTE_PORT:-8090}
+WMLM_TOP_K=5
+EOF
+pct push "$CTID" /tmp/wmlm-werkruimte.env "$TARGET/workspace/config.env" --perms 0640
+rm -f /tmp/wmlm-werkruimte.env
+
+cat > /tmp/wmlm-werkruimte.service <<EOF
+[Unit]
+Description=Werdens Media LLM — werkruimtelaag (documenten met bronvermelding)
+Documentation=https://github.com/Theberas04/werdens-media-llm
+After=network-online.target $DIENST.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$GEBRUIKER
+Group=$GEBRUIKER
+WorkingDirectory=$TARGET/workspace
+EnvironmentFile=$TARGET/workspace/config.env
+ExecStart=/usr/bin/python3 $TARGET/workspace/wmlm_workspace.py serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+pct push "$CTID" /tmp/wmlm-werkruimte.service "/etc/systemd/system/$DIENST-werkruimte.service" --perms 0644
+rm -f /tmp/wmlm-werkruimte.service
+
+binnen chown -R "$GEBRUIKER:$GEBRUIKER" "$TARGET/workspace" "$TARGET/data"
+binnen_bash "systemctl daemon-reload && systemctl enable $DIENST-werkruimte >/dev/null 2>&1 && systemctl restart $DIENST-werkruimte"
+log "    werkruimtelaag op poort ${WMLM_WERKRUIMTE_PORT:-8090} (chatmodel: $CHAT_STEM)"
+
+log "    medialaag installeren (spraak naar tekst en spraak uit)"
+bash "$SCRIPT_DIR/provision-media.sh" "$CTID" || warn "Medialaag mislukte; herstel met: bash $SCRIPT_DIR/provision-media.sh $CTID"
 
 log "Testen of de API antwoordt"
 OK=0

@@ -43,9 +43,45 @@ STEMPEN = Path(os.environ.get("WMLM_VOICES", BASIS.parent / "media" / "voices"))
 MODELLEN = Path(os.environ.get("WMLM_MEDIA_MODELS", BASIS.parent / "media" / "models"))
 WERKMAP = Path(os.environ.get("WMLM_MEDIA_TMP", BASIS.parent / "data" / "media-tmp"))
 
-WHISPER_BIN = Path(os.environ.get("WMLM_WHISPER_BIN", BIN / "whisper-cli"))
+
+
+def _uitvoerbaar(pad: Path) -> bool:
+    return pad.exists() and os.access(pad, os.X_OK)
+
+
+def _kies_whisper() -> Path:
+    """Zoek de whisper.cpp-binary. De kant-en-klare uitpakmap heet per versie
+    anders (whisper-bin-ubuntu-x64, whisper, …) en heet het programma soms
+    'main' in plaats van 'whisper-cli', dus we zoeken in plaats van te gokken."""
+    vast = os.environ.get("WMLM_WHISPER_BIN")
+    if vast:
+        return Path(vast)
+    for naam in ("whisper-cli", "main"):
+        kandidaten = [
+            BIN / naam,
+            *sorted(BIN.glob(f"whisper*/{naam}")),
+            *sorted(BIN.glob(f"whisper*/*/{naam}")),
+            *sorted(BIN.glob(f"{naam}*/{naam}")),
+        ]
+        for pad in kandidaten:
+            if _uitvoerbaar(pad):
+                return pad
+    return BIN / "whisper-cli"
+
+
+def _kies_piper() -> Path:
+    vast = os.environ.get("WMLM_PIPER_BIN")
+    if vast:
+        return Path(vast)
+    for pad in [BIN / "piper" / "piper", BIN / "piper", *sorted(BIN.glob("piper*/piper"))]:
+        if _uitvoerbaar(pad):
+            return pad
+    return BIN / "piper" / "piper"
+
+
+WHISPER_BIN = _kies_whisper()
 WHISPER_MODEL = Path(os.environ.get("WMLM_WHISPER_MODEL", MODELLEN / "ggml-small.bin"))
-PIPER_BIN = Path(os.environ.get("WMLM_PIPER_BIN", BIN / "piper" / "piper"))
+PIPER_BIN = _kies_piper()
 PIPER_STEM = Path(os.environ.get("WMLM_PIPER_STEM", STEMPEN / "nl_NL-mls-medium.onnx"))
 FFMPEG = os.environ.get("WMLM_FFMPEG", "ffmpeg")
 COMFY = os.environ.get("WMLM_COMFY_URL", "").rstrip("/")

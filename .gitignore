@@ -4,6 +4,11 @@ models/
 engine/llama-*/
 engine/*.tar.gz
 
+# medialaag: binaries en stemmen horen niet in git
+media/bin/
+media/voices/
+media/tmp/
+
 # gegevens en logs
 data/
 logs/
