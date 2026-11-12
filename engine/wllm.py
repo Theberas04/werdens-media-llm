@@ -5549,13 +5549,16 @@ def gereedschap_valuta_geschiedenis(verzoek: str) -> dict:
     hoogste = max(waarden, key=lambda stuk: stuk[1])
     laagste = min(waarden, key=lambda stuk: stuk[1])
     verschil = (laatste - eerste) / eerste * 100 if eerste else 0
+    def _koers(waarde: float) -> str:
+        return f"{waarde:.4f}".replace(".", ",")
+
     return {
         "naam": "valuta-geschiedenis",
         "bron": "frankfurter.app (Europese Centrale Bank)",
         "tekst": (
-            f"EUR/{munt} over {dagen} dagen: van {_getal(eerste)} naar {_getal(laatste)} "
-            f"({verschil:+.1f}%). Hoogste {_getal(hoogste[1])} op {hoogste[0]}, "
-            f"laagste {_getal(laagste[1])} op {laagste[0]}.".replace(".", ",")
+            f"EUR/{munt} over {dagen} dagen: van {_koers(eerste)} naar {_koers(laatste)} "
+            f"({verschil:+.1f}%). Hoogste {_koers(hoogste[1])} op {hoogste[0]}, "
+            f"laagste {_koers(laagste[1])} op {laagste[0]}.".replace(".", ",")
         ),
     }
 
@@ -5763,6 +5766,8 @@ def gereedschap_kosten_apparaat(verzoek: str) -> dict:
     uur_match = re.search(r"(\d{1,2})\s*(uur|uren)\s*(per dag|daags)?", laag)
     if uur_match:
         uren = float(uur_match.group(1))
+    standaard_uren = {"vriezer": 24, "koelkast": 24, "tv": 4, "laptop": 8, "computer": 8,
+                      "desktop": 8, "server": 24, "router": 24, "ledlamp": 4, "gloeilamp": 4}
     if watt is None:
         bekend = {"vriezer": 150, "koelkast": 100, "wasmachine": 1000, "droger": 2500,
                   "vaatwasser": 1200, "oven": 2000, "magnetron": 1000, "waterkoker": 2000,
@@ -5772,6 +5777,8 @@ def gereedschap_kosten_apparaat(verzoek: str) -> dict:
         for naam, vermogen in bekend.items():
             if naam in laag:
                 watt = float(vermogen)
+                if not uur_match and naam in standaard_uren:
+                    uren = float(standaard_uren[naam])
                 break
     if watt is None:
         return {"naam": "kosten apparaat", "bron": "eigen berekening", "tekst": "",
@@ -5790,14 +5797,24 @@ def gereedschap_kosten_apparaat(verzoek: str) -> dict:
             prijs = sum(waarden) / len(waarden)
     except Exception:
         pass
-    kWh_jaar = watt / 1000 * uren * 365
+    jaarverbruik = {"vriezer": 250, "koelkast": 150, "wasmachine": 200, "droger": 250,
+                    "vaatwasser": 250, "oven": 150, "magnetron": 60, "waterkoker": 60,
+                    "tv": 120, "laptop": 50, "computer": 250, "desktop": 300, "server": 400,
+                    "airco": 400, "warmtepomp": 2500, "ledlamp": 10, "gloeilamp": 60,
+                    "stofzuiger": 30, "koffiezetapparaat": 100, "quooker": 500}
+    bekend_verbruik = next((waarde for naam, waarde in jaarverbruik.items() if naam in laag), None)
+    if bekend_verbruik and not uur_match:
+        kWh_jaar = float(bekend_verbruik)
+        uitleg = f"een gemiddelde {next(naam for naam in jaarverbruik if naam in laag)} gebruikt"
+    else:
+        kWh_jaar = watt / 1000 * uren * 365
+        uitleg = f"een apparaat van {_getal(watt, ' watt')} dat {_getal(uren, ' uur per dag')} aanstaat, gebruikt"
     return {
         "naam": "kosten apparaat",
         "bron": "eigen berekening met de actuele stroomprijs",
         "tekst": (
-            f"Een apparaat van {_getal(watt, ' watt')} dat {_getal(uren, ' uur per dag')} aanstaat, "
-            f"gebruikt ongeveer {_getal(kWh_jaar, ' kWh per jaar')}. Bij "
-            f"{prijs:.3f}".replace(".", ",") + " euro per kWh kost dat ongeveer "
+            f"{uitleg[0].upper() + uitleg[1:]} ongeveer {_getal(kWh_jaar, ' kWh per jaar')}. Bij "
+            + f"{prijs:.3f}".replace(".", ",") + " euro per kWh kost dat ongeveer "
             + f"{_getal(kWh_jaar * prijs, ' euro per jaar')}."
         ),
     }
@@ -6378,32 +6395,59 @@ def gereedschap_muziekalbums(artiest: str) -> dict:
 
 
 def gereedschap_landeninfo(land: str) -> dict:
-    """Hoofdstad, inwoners, valuta en talen van een land."""
+    """Hoofdstad, inwoners, oppervlakte en valuta van een land (Wikidata)."""
     land = (land or "").strip()
     if not land:
-        return {"naam": "landeninfo", "bron": "restcountries.com", "tekst": "", "fout": "geen land opgegeven"}
-    gegevens = _haal_json(
-        "https://restcountries.com/v3.1/name/" + urllib.parse.quote(land)
-        + "?fields=name,capital,population,currencies,languages,region,area",
-        limiet=20,
+        return {"naam": "landeninfo", "bron": "wikidata.org", "tekst": "", "fout": "geen land opgegeven"}
+    vraag = (
+        "SELECT ?landLabel ?hoofdstadLabel ?inwoners ?oppervlakte ?valutaLabel WHERE {"
+        f' ?land rdfs:label "{land}"@nl .'
+        " ?land wdt:P31/wdt:P279* wd:Q6256 ."
+        " OPTIONAL { ?land wdt:P36 ?hoofdstad . }"
+        " OPTIONAL { ?land wdt:P1082 ?inwoners . }"
+        " OPTIONAL { ?land wdt:P2046 ?oppervlakte . }"
+        " OPTIONAL { ?land wdt:P38 ?valuta . }"
+        ' SERVICE wikibase:label { bd:serviceParam wikibase:language "nl,en". }'
+        "} LIMIT 1"
     )
-    if not isinstance(gegevens, list) or not gegevens:
-        return {"naam": "landeninfo", "bron": "restcountries.com", "tekst": "",
-                "fout": f"geen land gevonden met '{land}'"}
-    stuk = gegevens[0]
-    naam = ((stuk.get("name") or {}).get("common") or land)
-    hoofdstad = ", ".join(stuk.get("capital") or []) or "?"
-    valuta = ", ".join(
-        f"{waarde.get('name')} ({code})" for code, waarde in (stuk.get("currencies") or {}).items()
-    ) or "?"
-    talen = ", ".join((stuk.get("languages") or {}).values()) or "?"
+    try:
+        gegevens = _haal_json(
+            "https://query.wikidata.org/sparql?format=json&query=" + urllib.parse.quote(vraag),
+            limiet=30,
+        )
+    except Exception as fout:
+        return {"naam": "landeninfo", "bron": "wikidata.org", "tekst": "",
+                "fout": f"{type(fout).__name__}: {fout}"}
+    rijen = ((gegevens or {}).get("results") or {}).get("bindings") or []
+    if not rijen:
+        return {"naam": "landeninfo", "bron": "wikidata.org", "tekst": "",
+                "fout": f"geen land gevonden met de naam '{land}'"}
+    rij = rijen[0]
+
+    def _waarde(sleutel: str) -> str:
+        return str((rij.get(sleutel) or {}).get("value") or "")
+
+    naam = _waarde("landLabel") or land
+    hoofdstad = _waarde("hoofdstadLabel") or "?"
+    inwoners = _waarde("inwoners")
+    oppervlakte = _waarde("oppervlakte")
+    valuta = _waarde("valutaLabel") or "?"
+    stukken = [f"hoofdstad {hoofdstad}"]
+    if inwoners:
+        try:
+            stukken.append(f"{int(float(inwoners)):,} inwoners".replace(",", "."))
+        except ValueError:
+            pass
+    if oppervlakte:
+        try:
+            stukken.append(f"{int(float(oppervlakte)):,} km²".replace(",", "."))
+        except ValueError:
+            pass
+    stukken.append(f"valuta {valuta}")
     return {
         "naam": "landeninfo",
-        "bron": "restcountries.com",
-        "tekst": (
-            f"{naam}: hoofdstad {hoofdstad}, {_getal(stuk.get('population'), komma=False)} inwoners, "
-            f"{_getal(stuk.get('area'), komma=False)} km², valuta {valuta}, talen {talen}."
-        ),
+        "bron": "wikidata.org (CC0)",
+        "tekst": f"{naam}: " + ", ".join(stukken) + ".",
     }
 
 
@@ -6909,12 +6953,18 @@ def gereedschap_huizenprijzen(plaats: str) -> dict:
                 "fout": f"geen verkoopprijzen voor {naam}"}
     rijen.sort(key=lambda rij: str(rij.get("Perioden") or ""))
     laatste = rijen[-1]
+    periode = str(laatste.get("Perioden") or "")
+    jaar = int(periode[:4]) if periode[:4].isdigit() else 0
+    waarschuwing = ""
+    if jaar and jaar < datetime.date.today().year - 2:
+        waarschuwing = (f" Let op: dit is het laatste jaar in deze CBS-tabel ({jaar}); "
+                        "recentere prijzen staan in de CBS-statline.")
     return {
         "naam": "huizenprijzen",
-        "bron": f"opendata.cbs.nl (tabel 83625NED, {laatste.get('Perioden')})",
+        "bron": f"opendata.cbs.nl (tabel 83625NED, {periode})",
         "tekst": (f"{naam}: gemiddelde verkoopprijs van een bestaande woning "
                   f"{_getal(laatste.get('GemiddeldeVerkoopprijs_1'), ' euro')} "
-                  "(alle woningtypen door elkaar)."),
+                  "(alle woningtypen door elkaar)." + waarschuwing),
     }
 
 
@@ -8250,7 +8300,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/tijd":
             return self._json(gereedschap_tijd())
         if path.startswith("/api/"):
-            soort = path[len("/api/") :].strip("/")
+            soort = urllib.parse.unquote(path[len("/api/") :].strip("/"))
             invoer = GEREEDSCHAP_ROUTES.get(soort)
             if invoer:
                 functie, veld = invoer
