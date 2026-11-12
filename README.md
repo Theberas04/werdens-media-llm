@@ -101,7 +101,7 @@ is of hoe laat het is. De engine haalt dat zelf op en zet het boven de vraag, du
 het model hoeft niets te beslissen — dat is precies waarom het ook met een klein
 model werkt.
 
-Er zijn drieënvijftig gereedschappen, in zes groepen.
+Er zijn eenenzestig gereedschappen, in zeven groepen.
 
 **Zonder internet** — de engine rekent zelf, dus altijd goed en direct:
 
@@ -174,6 +174,20 @@ Er zijn drieënvijftig gereedschappen, in zes groepen.
 | parkeren | OpenStreetMap | *waar kan ik parkeren in Utrecht?* |
 | feed | elke rss-feed | *laatste berichten van https://feeds.nos.nl/nosnieuwsalgemeen* |
 
+**Dagritme, taal en onderweg:**
+
+| Gereedschap | Bron | Voorbeeldvraag |
+|---|---|---|
+| brandstof | CBS | *wat kost benzine nu?* |
+| zon | Open-Meteo | *hoe laat gaat de zon onder?* |
+| synoniemen | WikiWoordenboek | *een ander woord voor huis* |
+| koken | de engine zelf | *2 cup in ml*, *3 ons in gram* |
+| prijsgeschiedenis | Marktplaats + eigen logboek | *wordt een rtx 3060 goedkoper?* |
+| artikel | nl.wikipedia.org | *wat is het artikel van de dag?* |
+| persberichten | Rijksoverheid | *wat heeft de overheid besloten?* |
+| reistijd | OSRM + NDW | *hoe lang doe ik over Utrecht naar Maastricht?* |
+| spelling | OpenTaal-woordenlijst | *controleer mijn spelling* |
+
 **Je eigen apps:**
 
 | Gereedschap | Wat het leest | Voorbeeldvraag |
@@ -191,6 +205,11 @@ De notities en de documenten lezen alleen wat je zelf aanwijst: zet
 mogen, gescheiden door een dubbele punt). Zonder die instelling zegt het
 gereedschap eerlijk dat het niets kan lezen in plaats van te gokken. Voor de
 boodschappenlijst wijst `WLLM_VOORRAAD_DB` naar de database van VoorraadThuis.
+
+De **prijsgeschiedenis** bewaart elke dag de mediaanprijs in een eigen SQLite-bestand
+(`WLLM_PRIJS_DB`, standaard `~/.werdens-media-llm/prijzen.db`). Hoe vaker je hem vraagt,
+hoe meer je ziet. De **spelling**-controle haalt de OpenTaal-woordenlijst (173.607 woorden)
+één keer op en bewaart die naast de prijsdatabase.
 
 De gereedschappen die OpenStreetMap gebruiken (horeca, laadpalen, parkeren) kunnen
 traag zijn of tijdelijk niets teruggeven: de gratis Overpass-servers zitten soms vol.
@@ -224,6 +243,8 @@ curl 'http://127.0.0.1:11434/api/buurtcijfers?gemeente=Sittard'
 curl 'http://127.0.0.1:11434/api/prijswacht?q=rtx%203060'
 curl 'http://127.0.0.1:11434/api/inflatie'
 curl 'http://127.0.0.1:11434/api/btw?q=btw%20over%20250%20euro'
+curl 'http://127.0.0.1:11434/api/reistijd?q=van%20Utrecht%20naar%20Maastricht'
+curl 'http://127.0.0.1:11434/api/brandstof'
 curl 'http://127.0.0.1:11434/api/gereedschap'      # wat er beschikbaar is
 ```
 
