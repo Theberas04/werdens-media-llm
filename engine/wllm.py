@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import html
 import json
 import os
 import re
@@ -42,9 +43,11 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 # --------------------------------------------------------------------------- #
 # Merk: het logo van Werdens Media staat in assets/ naast de drie lagen.
@@ -1485,6 +1488,491 @@ def kort_in(messages: list[dict], ctx: int, max_tokens: int) -> tuple[list[dict]
     return uit, weggelaten
 
 
+# ---------------------------------------------------------------------------
+# Gereedschap: dingen die een taalmodel niet uit zichzelf kan weten
+#
+# Een taalmodel maakt woorden op basis van wat het ooit gelezen heeft. Het weet
+# niet wat het vandaag in Hilversum doet, wat er in het nieuws is of hoe laat
+# het is. Daarvoor haalt de engine zelf gegevens op -- weer, nieuws, naslag en
+# zoeken -- en zet die in de vraag. Het model hoeft dus niets te beslissen: het
+# krijgt de gegevens kant-en-klaar aangeleverd, wat ook voor een klein model
+# werkt.
+#
+# Alles is sleutelvrij: Open-Meteo (weer), nl.wikipedia (naslag), de NOS-feed
+# (nieuws) en DuckDuckGo (zoeken). Uitzetten kan met WLLM_GEREEDSCHAP=0.
+# ---------------------------------------------------------------------------
+
+GEREEDSCHAP = os.environ.get("WLLM_GEREEDSCHAP", "1").strip().lower() not in (
+    "0",
+    "nee",
+    "uit",
+    "false",
+    "off",
+)
+GEREEDSCHAP_TIMEOUT = float(os.environ.get("WLLM_GEREEDSCHAP_TIMEOUT", "15"))
+GEREEDSCHAP_PLAATS = os.environ.get("WLLM_GEREEDSCHAP_PLAATS", "").strip()
+GEREEDSCHAP_UA = "WerdensMediaLLM/1.0 (eigen installatie)"
+
+# WMO-weercodes van Open-Meteo naar gewoon Nederlands.
+WMO = {
+    0: "onbewolkt",
+    1: "licht bewolkt",
+    2: "half bewolkt",
+    3: "zwaar bewolkt",
+    45: "mist",
+    48: "mist met rijp",
+    51: "lichte motregen",
+    53: "motregen",
+    55: "zware motregen",
+    56: "lichte ijzel",
+    57: "ijzel",
+    61: "lichte regen",
+    63: "regen",
+    65: "zware regen",
+    66: "lichte ijzelregen",
+    67: "ijzelregen",
+    71: "lichte sneeuw",
+    73: "sneeuw",
+    75: "zware sneeuw",
+    77: "sneeuwkorrels",
+    80: "lichte buien",
+    81: "buien",
+    82: "zware buien",
+    85: "lichte sneeuwbuien",
+    86: "zware sneeuwbuien",
+    95: "onweer",
+    96: "onweer met hagel",
+    99: "zwaar onweer met hagel",
+}
+
+
+def _haal(url: str, gegevens: bytes | None = None, koppen: dict | None = None) -> bytes:
+    """Haal een adres op. Korte tijd, eigen naam, en nooit stil blijven hangen."""
+    koppen = dict(koppen or {})
+    koppen.setdefault("User-Agent", GEREEDSCHAP_UA)
+    koppen.setdefault("Accept-Language", "nl-NL,nl;q=0.9,en;q=0.5")
+    verzoek = urllib.request.Request(url, data=gegevens, headers=koppen)
+    with urllib.request.urlopen(verzoek, timeout=GEREEDSCHAP_TIMEOUT) as antwoord:
+        return antwoord.read()
+
+
+def _haal_json(url: str, gegevens: bytes | None = None) -> Any:
+    return json.loads(_haal(url, gegevens).decode("utf-8", "replace"))
+
+
+def _schoon(tekst: str) -> str:
+    """HTML eraf en overtollige witruimte eruit."""
+    tekst = re.sub(r"<[^>]+>", " ", tekst or "")
+    tekst = html.unescape(tekst)
+    return re.sub(r"\s+", " ", tekst).strip()
+
+
+def _kort(tekst: str, lengte: int) -> str:
+    tekst = (tekst or "").strip()
+    if len(tekst) <= lengte:
+        return tekst
+    geknipt = tekst[:lengte]
+    if " " in geknipt:
+        geknipt = geknipt[: geknipt.rfind(" ")]
+    return geknipt + "…"
+
+
+def _getal(waarde: object, eenheid: str = "", komma: bool = True) -> str:
+    try:
+        cijfer = float(waarde)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ""
+    tekst = f"{cijfer:.1f}".rstrip("0").rstrip(".") if komma else f"{cijfer:.0f}"
+    if komma:
+        tekst = tekst.replace(".", ",")
+    return f"{tekst}{eenheid}"
+
+
+# ---- de afzonderlijke stukken gereedschap ---------------------------------
+
+
+def gereedschap_tijd() -> dict:
+    """Datum en tijd van deze machine."""
+    nu = time.localtime()
+    dagen = ["maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag", "zondag"]
+    tekst = (
+        f"Het is nu {dagen[nu.tm_wday]} {nu.tm_mday}-{nu.tm_mon:02d}-{nu.tm_year}, "
+        f"{nu.tm_hour:02d}:{nu.tm_min:02d} uur."
+    )
+    return {"naam": "tijd", "bron": "de klok van deze machine", "tekst": tekst}
+
+
+def gereedschap_weer(plaats: str) -> dict:
+    """Actueel weer en de verwachting voor drie dagen (Open-Meteo, zonder sleutel)."""
+    plaats = (plaats or "").strip()
+    if not plaats:
+        return {"naam": "weer", "bron": "open-meteo.com", "tekst": "", "fout": "geen plaats opgegeven"}
+    zoek = urllib.parse.quote(plaats)
+    gevonden = _haal_json(
+        f"https://geocoding-api.open-meteo.com/v1/search?name={zoek}&count=1&language=nl&format=json"
+    )
+    treffers = (gevonden or {}).get("results") or [] if isinstance(gevonden, dict) else []
+    if not treffers:
+        return {
+            "naam": "weer",
+            "bron": "open-meteo.com",
+            "tekst": "",
+            "fout": f"de plaats '{plaats}' is niet gevonden",
+        }
+    plek = treffers[0]
+    naam = plek.get("name") or plaats
+    land = plek.get("country") or ""
+    waar = f"{naam}, {land}" if land else naam
+    gegevens = _haal_json(
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={plek['latitude']}&longitude={plek['longitude']}"
+        "&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,"
+        "weather_code,wind_speed_10m"
+        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+        "&timezone=auto&forecast_days=3"
+    )
+    if not isinstance(gegevens, dict):
+        return {"naam": "weer", "bron": "open-meteo.com", "tekst": "", "fout": "geen gegevens terug"}
+    nu = gegevens.get("current") or {}
+    dagen = gegevens.get("daily") or {}
+    regels = [
+        f"Weer in {waar}: nu {_getal(nu.get('temperature_2m'), ' °C')} "
+        f"({WMO.get(nu.get('weather_code'), 'onbekend')}), "
+        f"gevoel {_getal(nu.get('apparent_temperature'), ' °C')}, "
+        f"vochtigheid {_getal(nu.get('relative_humidity_2m'), '%', komma=False)}, "
+        f"wind {_getal(nu.get('wind_speed_10m'), ' km/u', komma=False)}."
+    ]
+    datums = dagen.get("time") or []
+    for i, datum in enumerate(datums[:3]):
+        maximum = (dagen.get("temperature_2m_max") or [None])[i]
+        minimum = (dagen.get("temperature_2m_min") or [None])[i]
+        code = (dagen.get("weather_code") or [None])[i]
+        kans = (dagen.get("precipitation_probability_max") or [None])[i]
+        wanneer = "vandaag" if i == 0 else ("morgen" if i == 1 else "overmorgen")
+        regels.append(
+            f"  {wanneer} ({datum}): {_getal(minimum, ' °C')} tot {_getal(maximum, ' °C')}, "
+            f"{WMO.get(code, 'onbekend')}"
+            + (f", {_getal(kans, '% neerslag', komma=False)}" if kans is not None else "")
+        )
+    return {"naam": "weer", "bron": "open-meteo.com", "tekst": "\n".join(regels), "plaats": waar}
+
+
+def gereedschap_wiki(onderwerp: str) -> dict:
+    """Korte samenvatting uit de Nederlandse Wikipedia."""
+    onderwerp = (onderwerp or "").strip()
+    if not onderwerp:
+        return {"naam": "naslag", "bron": "nl.wikipedia.org", "tekst": "", "fout": "geen onderwerp"}
+    zoek = urllib.parse.quote(onderwerp)
+    gevonden = _haal_json(
+        "https://nl.wikipedia.org/w/api.php?action=query&list=search"
+        f"&srsearch={zoek}&format=json&srlimit=1&utf8=1"
+    )
+    treffers = []
+    if isinstance(gevonden, dict):
+        treffers = ((gevonden.get("query") or {}).get("search") or [])
+    if not treffers:
+        return {
+            "naam": "naslag",
+            "bron": "nl.wikipedia.org",
+            "tekst": "",
+            "fout": f"niets gevonden over '{onderwerp}'",
+        }
+    titel = treffers[0].get("title") or onderwerp
+    samenvatting = _haal_json(
+        f"https://nl.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(titel)}"
+    )
+    tekst = ""
+    if isinstance(samenvatting, dict):
+        tekst = samenvatting.get("extract") or ""
+    if not tekst:
+        tekst = _schoon(treffers[0].get("snippet") or "")
+    if not tekst:
+        return {
+            "naam": "naslag",
+            "bron": "nl.wikipedia.org",
+            "tekst": "",
+            "fout": f"geen samenvatting over '{titel}'",
+        }
+    return {
+        "naam": "naslag",
+        "bron": f"nl.wikipedia.org/wiki/{titel.replace(' ', '_')}",
+        "tekst": f"{titel}: {_kort(tekst, 900)}",
+        "titel": titel,
+    }
+
+
+def gereedschap_nieuws(aantal: int = 6) -> dict:
+    """De koppen van het NOS Nieuws (RSS, zonder sleutel)."""
+    ruw = _haal("https://feeds.nos.nl/nosnieuwsalgemeen").decode("utf-8", "replace")
+    koppen = []
+    for blok in re.findall(r"<item>(.*?)</item>", ruw, re.S)[:aantal]:
+        titel = re.search(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", blok, re.S)
+        if titel:
+            koppen.append(_schoon(titel.group(1)))
+    if not koppen:
+        return {"naam": "nieuws", "bron": "nos.nl", "tekst": "", "fout": "geen nieuws terug"}
+    regels = [f"{i}. {kop}" for i, kop in enumerate(koppen, 1)]
+    return {
+        "naam": "nieuws",
+        "bron": "nos.nl (NOS Nieuws)",
+        "tekst": "Koppen van het NOS Nieuws:\n" + "\n".join(regels),
+    }
+
+
+def _ddg_lite(vraag: str, post: bool) -> list[dict]:
+    """DuckDuckGo zonder poespas. Lukt het niet, dan geeft hij niets terug."""
+    adres = "https://lite.duckduckgo.com/lite/"
+    if post:
+        ruw = _haal(
+            adres,
+            urllib.parse.urlencode({"q": vraag}).encode(),
+            {"Content-Type": "application/x-www-form-urlencoded"},
+        ).decode("utf-8", "replace")
+    else:
+        ruw = _haal(f"{adres}?q={urllib.parse.quote(vraag)}").decode("utf-8", "replace")
+    treffers = []
+    for stuk in re.finditer(r"<a([^>]*)>(.*?)</a>", ruw, re.S):
+        attributen, tekst = stuk.group(1), _schoon(stuk.group(2))
+        if "result-link" not in attributen or not tekst:
+            continue
+        adres_gevonden = re.search(r"href=[\"']([^\"']+)[\"']", attributen)
+        adres_gevonden = html.unescape(adres_gevonden.group(1)) if adres_gevonden else ""
+        # DuckDuckGo verstopt het echte adres in een omleiding; die halen we eruit.
+        omgeleid = re.search(r"[?&]uddg=([^&]+)", adres_gevonden)
+        if omgeleid:
+            adres_gevonden = urllib.parse.unquote(omgeleid.group(1))
+        if adres_gevonden.startswith("//"):
+            adres_gevonden = "https:" + adres_gevonden
+        treffers.append({"titel": tekst, "url": adres_gevonden})
+    stukken = re.findall(r"class=[\"']result-snippet[\"'][^>]*>(.*?)</td>", ruw, re.S)
+    for i, stuk in enumerate(stukken[: len(treffers)]):
+        treffers[i]["tekst"] = _kort(_schoon(stuk), 240)
+    return treffers[:5]
+
+
+def _ddg_antwoord(vraag: str) -> dict | None:
+    """De instant-answer-API van DuckDuckGo: vaak een kant-en-klaar antwoord."""
+    gegevens = _haal_json(
+        "https://api.duckduckgo.com/?q="
+        f"{urllib.parse.quote(vraag)}&format=json&no_html=1&skip_disambig=1"
+    )
+    if not isinstance(gegevens, dict):
+        return None
+    for veld in ("Answer", "Abstract", "Definition"):
+        waarde = (gegevens.get(veld) or "").strip()
+        if waarde:
+            bron = gegevens.get("AbstractURL") or gegevens.get("DefinitionURL") or "duckduckgo.com"
+            return {"tekst": _kort(waarde, 700), "bron": bron}
+    return None
+
+
+def gereedschap_zoek(vraag: str) -> dict:
+    """Zoeken op internet. Meerdere routes, want geen enkele is altijd bereikbaar.
+
+    Lukt geen enkele route, dan zegt de engine dat eerlijk -- een verzonnen
+    antwoord is erger dan 'ik kon het niet opzoeken'.
+    """
+    vraag = (vraag or "").strip()
+    if not vraag:
+        return {"naam": "zoeken", "bron": "duckduckgo.com", "tekst": "", "fout": "geen zoekvraag"}
+    for post in (False, True):
+        try:
+            treffers = _ddg_lite(vraag, post)
+        except Exception:
+            treffers = []
+        if treffers:
+            regels = []
+            for i, treffer in enumerate(treffers, 1):
+                regel = f"{i}. {treffer['titel']}"
+                if treffer.get("tekst"):
+                    regel += f" -- {treffer['tekst']}"
+                if treffer.get("url"):
+                    regel += f" ({treffer['url']})"
+                regels.append(regel)
+            return {
+                "naam": "zoeken",
+                "bron": "duckduckgo.com",
+                "tekst": f"Zoekresultaten voor '{vraag}':\n" + "\n".join(regels),
+            }
+    try:
+        antwoord = _ddg_antwoord(vraag)
+    except Exception:
+        antwoord = None
+    if antwoord:
+        return {
+            "naam": "zoeken",
+            "bron": antwoord["bron"],
+            "tekst": f"Over '{vraag}': {antwoord['tekst']}",
+        }
+    naslag = gereedschap_wiki(vraag)
+    if naslag.get("tekst"):
+        naslag["naam"] = "zoeken"
+        naslag["tekst"] = f"Over '{vraag}' (uit de encyclopedie): {naslag['tekst']}"
+        return naslag
+    return {
+        "naam": "zoeken",
+        "bron": "duckduckgo.com",
+        "tekst": "",
+        "fout": f"geen zoekresultaten voor '{vraag}'",
+    }
+
+
+GEREEDSCHAP_SOORTEN = {
+    "weer": "actueel weer en verwachting (open-meteo.com)",
+    "nieuws": "koppen van het NOS Nieuws",
+    "naslag": "samenvatting uit de Nederlandse Wikipedia",
+    "zoeken": "zoeken op internet (duckduckgo.com)",
+    "tijd": "datum en tijd van deze machine",
+}
+
+
+# ---- kiezen, uitvoeren en in de vraag zetten ------------------------------
+
+
+def _plaats_uit(tekst: str) -> str:
+    """De plaats uit een vraag peuteren: 'in Hilversum', 'voor Utrecht', 'Hilversum'."""
+    for patroon in (
+        r"\bin\s+([A-Za-zÀ-ÿ' \-]{2,30})",
+        r"\bvoor\s+([A-Za-zÀ-ÿ' \-]{2,30})",
+        r"\bte\s+([A-Za-zÀ-ÿ' \-]{2,30})",
+    ):
+        treffer = re.search(patroon, tekst)
+        if treffer:
+            plaats = treffer.group(1).strip(" ?.,!")
+            plaats = re.split(r"\s+(?:vandaag|morgen|overmorgen|nu|deze|dit|het|de)\b", plaats)[0]
+            if len(plaats) >= 2:
+                return plaats.strip()
+    for woord in re.findall(r"\b[A-ZÀ-Ý][a-zà-ÿ]{2,}\b", tekst):
+        if woord.lower() not in ("wat", "hoe", "waar", "welke", "wie", "geef", "vertel", "het", "weer"):
+            return woord
+    return ""
+
+
+def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
+    """Welk gereedschap hoort bij deze vraag? Opdrachten met '/' gaan voor."""
+    tekst = (tekst or "").strip()
+    if not tekst:
+        return []
+    laag = tekst.lower()
+
+    for gebod, soort in (
+        ("/weer", "weer"),
+        ("/nieuws", "nieuws"),
+        ("/wiki", "naslag"),
+        ("/naslag", "naslag"),
+        ("/zoek", "zoeken"),
+        ("/tijd", "tijd"),
+    ):
+        if laag.startswith(gebod):
+            argument = tekst[len(gebod) :].strip(" :?")
+            if soort == "weer" and not argument:
+                argument = GEREEDSCHAP_PLAATS
+            return [(soort, argument)]
+
+    keuzes: list[tuple[str, str]] = []
+    if re.search(r"\b(weer|weersverwachting|weersvoorspelling|temperatuur|graden|regen|sneeuw|zonnig|bewolkt|waait|fris|koud|warm)\b", laag):
+        keuzes.append(("weer", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS))
+    if re.search(r"\b(nieuws|actualiteit|actualiteiten|laatste ontwikkelingen|wat speelt er)\b", laag):
+        keuzes.append(("nieuws", ""))
+    if re.search(r"\b(hoe laat|welke dag|welke datum|datum van vandaag|vandaag de dag)\b", laag):
+        keuzes.append(("tijd", ""))
+    if not keuzes:
+        if re.search(r"\b(wie is|wie was|wie zijn|wat is|wat zijn|waar ligt|waar staat|geschiedenis van|uitleg over|wat betekent|hoe werkt)\b", laag):
+            onderwerp = re.sub(
+                r"^.*?\b(wie is|wie was|wie zijn|wat is|wat zijn|waar ligt|waar staat|"
+                r"geschiedenis van|uitleg over|wat betekent|hoe werkt)\b",
+                "",
+                laag,
+            ).strip(" ?!.:")
+            keuzes.append(("naslag", onderwerp))
+        elif re.search(r"\b(zoek|zoek op|zoek eens|opzoeken|op te zoeken|search|google)\b", laag):
+            keuzes.append(("zoeken", tekst))
+    return keuzes[:2]
+
+
+def gereedschap_uitvoeren(keuzes: list[tuple[str, str]]) -> list[dict]:
+    """Voer het gekozen gereedschap uit. Fouten zijn geen crash: ze worden gemeld."""
+    uitkomsten = []
+    for soort, argument in keuzes:
+        try:
+            if soort == "weer":
+                uitkomsten.append(gereedschap_weer(argument))
+            elif soort == "nieuws":
+                uitkomsten.append(gereedschap_nieuws())
+            elif soort == "naslag":
+                uitkomsten.append(gereedschap_wiki(argument))
+            elif soort == "zoeken":
+                uitkomsten.append(gereedschap_zoek(argument))
+            elif soort == "tijd":
+                uitkomsten.append(gereedschap_tijd())
+        except Exception as fout:  # nooit de vraag laten stuklopen op gereedschap
+            uitkomsten.append(
+                {"naam": soort, "bron": "", "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+            )
+    return uitkomsten
+
+
+def gereedschap_blok(uitkomsten: list[dict]) -> str:
+    """De opgehaalde gegevens als blok boven de vraag."""
+    bruikbaar = [u for u in uitkomsten if u.get("tekst")]
+    if not bruikbaar:
+        return ""
+    nu = time.localtime()
+    koppen = [f"[Actuele gegevens, opgehaald {nu.tm_mday}-{nu.tm_mon:02d}-{nu.tm_year} "
+              f"{nu.tm_hour:02d}:{nu.tm_min:02d}]"]
+    for uitkomst in bruikbaar:
+        koppen.append(uitkomst["tekst"])
+        if uitkomst.get("bron"):
+            koppen.append(f"(bron: {uitkomst['bron']})")
+    koppen.append(
+        "Gebruik deze gegevens als ze bij de vraag passen, en verzin niets bij wat er "
+        "niet staat. Klopt het antwoord niet met de gegevens, zeg dan wat er wel staat."
+    )
+    return "\n".join(koppen)
+
+
+def verrijk(messages: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Zet de opgehaalde gegevens in het laatste bericht van de gebruiker.
+
+    Bewust in dat bericht en niet als extra systeembericht: bij een lang gesprek
+    laat de inkorting oudere berichten weg, maar het laatste bericht blijft altijd
+    staan -- en juist daar hoort de actuele vraag bij.
+    """
+    if not GEREEDSCHAP or not messages:
+        return messages, []
+    laatste = None
+    for bericht in reversed(messages):
+        if bericht.get("role") == "user":
+            laatste = bericht
+            break
+    if laatste is None:
+        return messages, []
+    inhoud = laatste.get("content")
+    if not isinstance(inhoud, str) or not inhoud.strip():
+        return messages, []
+    keuzes = gereedschap_kies(inhoud)
+    if not keuzes:
+        return messages, []
+    uitkomsten = gereedschap_uitvoeren(keuzes)
+    blok = gereedschap_blok(uitkomsten)
+    gelukt = [u["naam"] for u in uitkomsten if u.get("tekst")]
+    mislukt = [f"{u['naam']} ({u.get('fout')})" for u in uitkomsten if not u.get("tekst")]
+    if gelukt:
+        sys.stderr.write(f"[wllm] gereedschap gebruikt: {', '.join(gelukt)}\n")
+    if mislukt:
+        sys.stderr.write(f"[wllm] gereedschap mislukt: {', '.join(mislukt)}\n")
+    if not blok:
+        return messages, uitkomsten
+    nieuw = dict(laatste)
+    nieuw["content"] = f"{blok}\n\n{inhoud}"
+    vervangen = list(messages)
+    for i in range(len(vervangen) - 1, -1, -1):
+        if vervangen[i] is laatste:
+            vervangen[i] = nieuw
+            break
+    return vervangen, uitkomsten
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = f"wllm/{VERSION}"
@@ -1608,6 +2096,9 @@ class Handler(BaseHTTPRequestHandler):
             f" {_fysieke_cores()} fysiek)</small></dd>"
             f"<dt>GPU</dt><dd>{gpu_tekst}</dd>"
             f"<dt>Aanbevolen model</dt><dd>{aanb_tekst}</dd>"
+            # Wat het model niet zelf kan weten, haalt de engine op.
+            f"<dt>Gereedschap</dt><dd>{'aan' if GEREEDSCHAP else 'uit'}"
+            f" <small>({', '.join(GEREEDSCHAP_SOORTEN)})</small></dd>"
             "</dl></div></div>"
             "<div class=\"kaart\"><div class=\"kaart-kop\"><h2>Modellen in huis</h2></div>"
             "<div class=\"kaart-body\"><table class=\"tabel\">"
@@ -1655,6 +2146,40 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return {}
 
+    @property
+    def _schrijf_slot(self) -> threading.Lock:
+        """Eén slot per verbinding: de hartslag en het antwoord mogen elkaar nooit
+        midden in een regel raken."""
+        slot = getattr(self, "_slot", None)
+        if slot is None:
+            slot = threading.Lock()
+            self._slot = slot
+        return slot
+
+    def _wakker_houden(self) -> threading.Event:
+        """Stuur elke 10 s een leeg bericht zolang het antwoord nog niet begint.
+
+        Nodig voor verbindingen met een tussenschakel die na honderd seconden
+        stilte afbreekt: Cloudflare antwoordt dan met 524, ook al rekent de
+        rekenkern gewoon door. Een regel die met ':' begint is een leeg
+        SSE-bericht dat elke client negeert, maar houdt de verbinding wel open."""
+        stop = threading.Event()
+
+        def tik() -> None:
+            while not stop.wait(10.0):
+                # Zodra er echt geantwoord wordt is de hartslag niet meer nodig.
+                if getattr(self, "_geschreven", False):
+                    return
+                with self._schrijf_slot:
+                    try:
+                        self.wfile.write(b": rekenen\n\n")
+                        self.wfile.flush()
+                    except Exception:
+                        return
+
+        threading.Thread(target=tik, daemon=True).start()
+        return stop
+
     def _stream_start(self):
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
@@ -1663,8 +2188,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def _nd(self, obj) -> bool:
         try:
-            self.wfile.write((json.dumps(obj) + "\n").encode())
-            self.wfile.flush()
+            with self._schrijf_slot:
+                self.wfile.write((json.dumps(obj) + "\n").encode())
+                self.wfile.flush()
+                self._geschreven = True
+            return True
+        except (BrokenPipeError, ConnectionResetError):
+            return False
+
+    def _sse(self, obj) -> bool:
+        """Eén regel van de OpenAI-stream. Ook hier met het schrijfslot, want de
+        hartslag mag er nooit middenin vallen."""
+        try:
+            with self._schrijf_slot:
+                self.wfile.write(f"data: {json.dumps(obj)}\n\n".encode())
+                self.wfile.flush()
+                self._geschreven = True
             return True
         except (BrokenPipeError, ConnectionResetError):
             return False
@@ -1683,6 +2222,12 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"hersteld": True, "gestopt": gestopt})
 
     # -- routing -----------------------------------------------------------
+    def _vraag(self, naam: str) -> str:
+        """Eén waarde uit de queryreeks, bijvoorbeeld ?plaats=Hilversum."""
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        waarden = urllib.parse.parse_qs(query).get(naam) or [""]
+        return (waarden[0] or "").strip()
+
     def do_GET(self):
         path = self.path.split("?")[0]
         if path in ("/logo.png", "/merk.png"):
@@ -1699,6 +2244,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"models": STORE.list_models()})
         if path == "/api/herstel":
             return self._herstel()
+        if path == "/api/gereedschap":
+            return self._json(
+                {
+                    "aan": GEREEDSCHAP,
+                    "soorten": GEREEDSCHAP_SOORTEN,
+                    "standaard_plaats": GEREEDSCHAP_PLAATS,
+                    "tijd": gereedschap_tijd()["tekst"],
+                }
+            )
+        if path == "/api/weer":
+            return self._json(gereedschap_weer(self._vraag("plaats") or GEREEDSCHAP_PLAATS))
+        if path == "/api/wiki":
+            return self._json(gereedschap_wiki(self._vraag("q") or self._vraag("onderwerp")))
+        if path == "/api/zoek":
+            return self._json(gereedschap_zoek(self._vraag("q") or self._vraag("vraag")))
+        if path == "/api/nieuws":
+            return self._json(gereedschap_nieuws())
+        if path == "/api/tijd":
+            return self._json(gereedschap_tijd())
         if path == "/api/ps":
             return self._json({"models": [e.info() for e in ENGINES.loaded()]})
         if path == "/v1/models":
@@ -1890,6 +2454,8 @@ class Handler(BaseHTTPRequestHandler):
         # client met eigen afspraken (Hermes) merkt hier niets van.
         if STANDAARD_SYSTEEM and not any(m.get("role") == "system" for m in messages):
             messages = [{"role": "system", "content": STANDAARD_SYSTEEM}, *messages]
+        # Gereedschap: actuele gegevens (weer, nieuws, naslag) boven de vraag zetten.
+        messages, _gebruikt = verrijk(messages)
         messages, weggelaten = kort_in(messages, eng.ctx, max_tokens)
         if weggelaten:
             sys.stderr.write(f"[wllm] {weggelaten} bericht(en) weggelaten voor het contextvenster\n")
@@ -1914,6 +2480,9 @@ class Handler(BaseHTTPRequestHandler):
         if msgs:
             if STANDAARD_SYSTEEM and not any(m.get("role") == "system" for m in msgs):
                 msgs = [{"role": "system", "content": STANDAARD_SYSTEEM}, *msgs]
+            # Ook op deze route gereedschap: de OpenAI-route is de route die
+            # clients als Hermes gebruiken.
+            msgs, _gebruikt = verrijk(msgs)
             msgs, weggelaten = kort_in(msgs, eng.ctx, mt)
             if weggelaten:
                 sys.stderr.write(
@@ -1964,6 +2533,8 @@ class Handler(BaseHTTPRequestHandler):
             )
         self._stream_start()
         usage, finish = {}, "stop"
+        # Hartslag: houd de verbinding open terwijl de rekenkern nog rekent.
+        self._wakker_houden()
         for chunk in engine_stream(eng, payload, self.connection):
             if chunk.get("usage"):
                 usage = chunk["usage"]
@@ -2034,6 +2605,8 @@ class Handler(BaseHTTPRequestHandler):
             )
         self._stream_start()
         usage, finish = {}, "stop"
+        # Hartslag: houd de verbinding open terwijl de rekenkern nog rekent.
+        self._wakker_houden()
         for chunk in engine_stream(eng, payload, self.connection):
             if chunk.get("usage"):
                 usage = chunk["usage"]
@@ -2100,11 +2673,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
             self.end_headers()
+            # Hartslag: houd de verbinding open terwijl de rekenkern nog rekent.
+            self._wakker_houden()
             for chunk in engine_stream(eng, payload, self.connection):
-                try:
-                    self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
+                if not self._sse(chunk):
                     break
             eng.touch()
             try:

@@ -94,6 +94,35 @@ binnen. Alles blijft op je eigen machine.
 
 ![De chatpagina op een telefoon](docs/img/chat-mobiel.png)
 
+## Gereedschap: wat het model niet zelf kan weten
+
+Een taalmodel weet niet wat het vandaag in Hilversum doet, wat er in het nieuws
+is of hoe laat het is. De engine haalt dat zelf op en zet het boven de vraag, dus
+het model hoeft niets te beslissen — dat is precies waarom het ook met een klein
+model werkt.
+
+| Gereedschap | Bron | Voorbeeldvraag |
+|---|---|---|
+| weer | [Open-Meteo](https://open-meteo.com) | *wat is het weer vandaag in Hilversum?* |
+| nieuws | NOS Nieuws (RSS) | *wat is er in het nieuws?* |
+| naslag | Nederlandse Wikipedia | *wie is Mark Rutte?* |
+| zoeken | DuckDuckGo | *zoek de openingstijden van de Gamma* |
+| tijd | deze machine | *hoe laat is het?* |
+
+Je kunt een gereedschap ook direct afdwingen met `/weer Utrecht`, `/nieuws`,
+`/wiki Hilversum`, `/zoek …` of `/tijd`. Alles is sleutelvrij en dus gratis;
+uitzetten kan met `WLLM_GEREEDSCHAP=0`.
+
+Er zijn ook losse routes, handig voor een eigen script of een dashboard:
+
+```bash
+curl 'http://127.0.0.1:11434/api/weer?plaats=Hilversum'
+curl 'http://127.0.0.1:11434/api/nieuws'
+curl 'http://127.0.0.1:11434/api/wiki?q=Hilversum'
+curl 'http://127.0.0.1:11434/api/zoek?q=wat%20is%20een%20vectordatabase'
+curl 'http://127.0.0.1:11434/api/gereedschap'      # wat er beschikbaar is
+```
+
 ## Snel starten (op een Debian-machine)
 
 ```bash
@@ -299,6 +328,9 @@ videogeheugen en is de KV-cache f16, waardoor dezelfde modellen wél passen.
 | `WLLM_KV_TYPE` | `q8_0` | KV-cache-type; 8-bits halveert het geheugen |
 | `WLLM_KEEP_ALIVE` | `300` | seconden voordat een ongebruikt model wordt ontladen |
 | `WLLM_THREADS` | aantal CPU's | rekenkracht-threads |
+| `WLLM_GEREEDSCHAP` | `1` | weer, nieuws, naslag, zoeken en tijd aan of uit (`0`) |
+| `WLLM_GEREEDSCHAP_PLAATS` | leeg | plaats als er geen in de vraag staat |
+| `WLLM_GEREEDSCHAP_TIMEOUT` | `15` | seconden voordat een ophaalpoging wordt opgegeven |
 
 De werkruimtelaag (`workspace/config.env`) en de medialaag (`media/config.env`)
 hebben hun eigen bestand:
