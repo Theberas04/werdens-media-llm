@@ -3642,27 +3642,11 @@ def gereedschap_horeca(zoekterm: str) -> dict:
         breedte, lengte, nette = _coordinaten(plaats)
     except Exception as fout:
         return {"naam": "horeca", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
-    vraag = (
-        f'[out:json][timeout:25];node["amenity"="{soort}"](around:1500,{breedte},{lengte});out 12;'
-    )
+    vraag = f'[out:json][timeout:20];node["amenity"="{soort}"](around:1500,{breedte},{lengte});out 12;'
     try:
-        gegevens = json.loads(
-            _haal(
-                "https://overpass-api.de/api/interpreter",
-                gegevens=urllib.parse.urlencode({"data": vraag}).encode("utf-8"),
-                koppen={"Content-Type": "application/x-www-form-urlencoded"},
-                limiet=40,
-            ).decode("utf-8", "replace")
-        )
-    except Exception:
-        gegevens = json.loads(
-            _haal(
-                "https://overpass.kumi.systems/api/interpreter",
-                gegevens=urllib.parse.urlencode({"data": vraag}).encode("utf-8"),
-                koppen={"Content-Type": "application/x-www-form-urlencoded"},
-                limiet=40,
-            ).decode("utf-8", "replace")
-        )
+        gegevens = _overpass(vraag)
+    except Exception as fout:
+        return {"naam": "horeca", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
     plekken = []
     for element in (gegevens or {}).get("elements") or []:
         naam = (element.get("tags") or {}).get("name")
@@ -3849,6 +3833,422 @@ def gereedschap_devhulp(verzoek: str) -> dict:
         "fout": "ik ken alleen sha256, sha1, md5, base64, json, contrast en qr",
     }
 
+# ---- F. uurverloop, laadpalen, parkeren, vorig jaar, btw, inflatie,
+#         wikipedia, marktplaats-prijswacht, afsluitingen en feeds
+
+MARKTPLAATS_LRP = "https://www.marktplaats.nl/lrp/api/search"
+AFSLUITINGEN_FEED = "https://opendata.ndw.nu/tijdelijke_verkeersmaatregelen_afsluitingen.xml.gz"
+AFSLUITINGEN_CACHE: dict = {"tijd": 0.0, "ruw": ""}
+
+
+def gereedschap_uurverloop(plaats: str) -> dict:
+    """Het weer per uur voor vandaag: wanneer is het droog (Open-Meteo)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "uurverloop", "bron": "open-meteo.com", "tekst": "", "fout": "geen plaats opgegeven"}
+    try:
+        breedte, lengte, nette = _coordinaten(plaats)
+    except Exception as fout:
+        return {"naam": "uurverloop", "bron": "open-meteo.com", "tekst": "", "fout": str(fout)}
+    gegevens = _haal_json(
+        "https://api.open-meteo.com/v1/forecast?"
+        f"latitude={breedte}&longitude={lengte}"
+        "&hourly=temperature_2m,precipitation,precipitation_probability,weather_code"
+        "&forecast_days=1&timezone=Europe/Amsterdam"
+    )
+    per_uur = (gegevens or {}).get("hourly") or {}
+    tijden = per_uur.get("time") or []
+    if not tijden:
+        return {"naam": "uurverloop", "bron": "open-meteo.com", "tekst": "", "fout": "geen gegevens"}
+    nu = datetime.datetime.now().strftime("%Y-%m-%dT%H:00")
+    regels, droog, nat = [], [], []
+    temperaturen = []
+    for nummer, moment in enumerate(tijden):
+        if moment < nu:
+            continue
+        temperatuur = (per_uur.get("temperature_2m") or [None])[nummer]
+        regen = (per_uur.get("precipitation") or [0])[nummer] or 0
+        kans = (per_uur.get("precipitation_probability") or [0])[nummer] or 0
+        if isinstance(temperatuur, (int, float)):
+            temperaturen.append(temperatuur)
+        (nat if regen > 0.1 or kans > 55 else droog).append(moment[11:16])
+        if len(regels) < 8:
+            regels.append(f"{moment[11:16]} {_getal(temperatuur, ' °C')} {_getal(kans, '% regen')}")
+        if len(regels) >= 8 and len(droog) + len(nat) > 12:
+            break
+    droog_tekst = (
+        f"Droog van {droog[0]} tot {droog[-1]}." if len(droog) >= 2
+        else "Geen duidelijk droog blok vandaag."
+    )
+    nat_tekst = f" Regen verwacht rond {nat[0]}." if nat else " Geen regen verwacht."
+    bereik = (
+        f" {_getal(min(temperaturen))} tot {_getal(max(temperaturen), '°C')}."
+        if temperaturen else ""
+    )
+    return {
+        "naam": "uurverloop",
+        "bron": "open-meteo.com",
+        "tekst": f"Weer per uur bij {nette}: " + " | ".join(regels) + f". {droog_tekst}{nat_tekst}{bereik}",
+    }
+
+
+def _overpass(vraag: str) -> dict:
+    """Een Overpass-vraag doen. De spiegel die het eerst echt antwoord geeft wint."""
+    gegevens = urllib.parse.urlencode({"data": vraag}).encode("utf-8")
+    koppen = {"Content-Type": "application/x-www-form-urlencoded"}
+    laatste: dict | None = None
+    for adres in ("https://overpass-api.de/api/interpreter",
+                  "https://overpass.kumi.systems/api/interpreter",
+                  "https://overpass.private.coffee/api/interpreter"):
+        try:
+            antwoord = json.loads(
+                _haal(adres, gegevens=gegevens, koppen=koppen, limiet=15).decode("utf-8", "replace")
+            )
+        except Exception:
+            continue
+        # een leeg antwoord kan ook betekenen dat deze spiegel jouw land niet kent
+        if antwoord.get("elements"):
+            return antwoord
+        laatste = antwoord
+    if laatste is None:
+        raise ValueError("openstreetmap is even overbelast; probeer het over een minuut opnieuw")
+    return laatste
+
+
+def _afstand_km(breedte: float, lengte: float, lat: float, lon: float) -> float:
+    dy = (lat - breedte) * 111
+    dx = (lon - lengte) * 111 * 0.62
+    return (dy * dy + dx * dx) ** 0.5
+
+
+def gereedschap_laadpalen(plaats: str) -> dict:
+    """Laadpalen in de buurt (OpenStreetMap)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "laadpalen", "bron": "openstreetmap.org", "tekst": "", "fout": "geen plaats opgegeven"}
+    try:
+        breedte, lengte, nette = _coordinaten(plaats)
+        gegevens = _overpass(
+            f'[out:json][timeout:20];node["amenity"="charging_station"](around:1500,{breedte},{lengte});out 15;'
+        )
+    except Exception as fout:
+        return {"naam": "laadpalen", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    palen = []
+    for element in (gegevens or {}).get("elements") or []:
+        lat, lon = element.get("lat"), element.get("lon")
+        if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+            continue
+        kenmerken = element.get("tags") or {}
+        naam = kenmerken.get("name") or kenmerken.get("operator") or "laadpaal"
+        aantal = kenmerken.get("capacity") or ""
+        palen.append((_afstand_km(breedte, lengte, lat, lon), naam, aantal))
+    if not palen:
+        return {"naam": "laadpalen", "bron": "openstreetmap.org",
+                "tekst": f"Geen laadpalen gevonden binnen 1,5 km van {nette}."}
+    palen.sort()
+    regels = [f"{naam} ({_getal(afstand, ' km')}" + (f", {aantal} punten)" if aantal else ")")
+              for afstand, naam, aantal in palen[:6]]
+    return {
+        "naam": "laadpalen",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": f"{len(palen)} laadpalen binnen 1,5 km van {nette}: " + ", ".join(regels),
+    }
+
+
+def gereedschap_parkeren(plaats: str) -> dict:
+    """Parkeergarages en -terreinen in de buurt (OpenStreetMap)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "parkeren", "bron": "openstreetmap.org", "tekst": "", "fout": "geen plaats opgegeven"}
+    try:
+        breedte, lengte, nette = _coordinaten(plaats)
+        gegevens = _overpass(
+            f'[out:json][timeout:25];node["amenity"="parking"](around:1500,{breedte},{lengte});out 30;'
+        )
+    except Exception as fout:
+        return {"naam": "parkeren", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    plekken = []
+    for element in (gegevens or {}).get("elements") or []:
+        lat, lon = element.get("lat"), element.get("lon")
+        if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+            continue
+        kenmerken = element.get("tags") or {}
+        naam = kenmerken.get("name")
+        if not naam:
+            continue
+        tarief = {"yes": "betaald", "no": "gratis"}.get(str(kenmerken.get("fee") or "").lower(), "")
+        overdekt = "garage" if str(kenmerken.get("parking") or "") == "multi-storey" else ""
+        extra = ", ".join(stuk for stuk in (tarief, overdekt) if stuk)
+        plekken.append((_afstand_km(breedte, lengte, lat, lon), naam, extra))
+    if not plekken:
+        return {"naam": "parkeren", "bron": "openstreetmap.org",
+                "tekst": f"Geen parkeerplaatsen met een naam gevonden binnen 1,5 km van {nette}."}
+    plekken.sort()
+    regels = [f"{naam} ({_getal(afstand, ' km')}{', ' + extra if extra else ''})"
+              for afstand, naam, extra in plekken[:6]]
+    return {
+        "naam": "parkeren",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": f"Parkeren bij {nette}: " + ", ".join(regels) + ". Tarieven staan er alleen bij als iemand ze invulde.",
+    }
+
+
+def gereedschap_vorigjaar(plaats: str) -> dict:
+    """Het weer op deze dag vorig jaar (Open-Meteo archief)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "vorigjaar", "bron": "open-meteo.com", "tekst": "", "fout": "geen plaats opgegeven"}
+    try:
+        breedte, lengte, nette = _coordinaten(plaats)
+    except Exception as fout:
+        return {"naam": "vorigjaar", "bron": "open-meteo.com", "tekst": "", "fout": str(fout)}
+    vandaag = datetime.date.today()
+    regels = []
+    for jaar in (vandaag.year - 1, vandaag.year - 2):
+        dag = vandaag.replace(year=jaar)
+        gegevens = _haal_json(
+            "https://archive-api.open-meteo.com/v1/archive?"
+            f"latitude={breedte}&longitude={lengte}&start_date={dag.isoformat()}&end_date={dag.isoformat()}"
+            "&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Europe/Amsterdam"
+        )
+        dagcijfers = (gegevens or {}).get("daily") or {}
+        hoog = (dagcijfers.get("temperature_2m_max") or [None])[0]
+        laag = (dagcijfers.get("temperature_2m_min") or [None])[0]
+        regen = (dagcijfers.get("precipitation_sum") or [None])[0]
+        if isinstance(hoog, (int, float)):
+            regels.append(
+                f"{jaar}: {_getal(laag)} tot {_getal(hoog, '°C')}"
+                + (f", {_getal(regen, ' mm regen')}" if isinstance(regen, (int, float)) else "")
+            )
+    if not regels:
+        return {"naam": "vorigjaar", "bron": "open-meteo.com (archief)", "tekst": "",
+                "fout": f"geen archiefgegevens voor {nette}"}
+    return {
+        "naam": "vorigjaar",
+        "bron": "open-meteo.com (archief, ERA5)",
+        "tekst": f"Op deze dag in {nette}: " + " | ".join(regels) + ".",
+    }
+
+
+def gereedschap_btw(verzoek: str) -> dict:
+    """Btw en percentages uitrekenen, ook andersom."""
+    verzoek = (verzoek or "").strip()
+    laag = verzoek.lower().replace(",", ".")
+    bedragen = [float(getal) for getal in re.findall(r"\d+(?:\.\d+)?", laag)]
+    if not bedragen:
+        return {"naam": "btw", "bron": "de engine zelf", "tekst": "",
+                "fout": "noem een bedrag, bijvoorbeeld 'btw over 250 euro'"}
+    bedrag = bedragen[0]
+    tarief = 21.0
+    for kandidaat in (21, 9, 0):
+        if re.search(rf"\b{kandidaat}\s*%", laag):
+            tarief = float(kandidaat)
+            break
+    if "inclusief" in laag or "incl." in laag or "met btw" in laag:
+        kaal = bedrag / (1 + tarief / 100)
+        btw = bedrag - kaal
+        tekst = (
+            f"{_getal(bedrag, ' euro')} inclusief {tarief:.0f}% btw is "
+            f"{_getal(kaal, ' euro')} exclusief btw; de btw is {_getal(btw, ' euro')}."
+        )
+    elif "% van" in laag and len(bedragen) >= 2:
+        deel = bedragen[0] / 100 * bedragen[1]
+        tekst = f"{_getal(bedragen[0], '%')} van {_getal(bedragen[1], ' euro')} is {_getal(deel, ' euro')}."
+    else:
+        btw = bedrag * tarief / 100
+        tekst = (
+            f"Btw over {_getal(bedrag, ' euro')} bij {tarief:.0f}% is {_getal(btw, ' euro')}; "
+            f"in totaal {_getal(bedrag + btw, ' euro')}."
+        )
+    return {"naam": "btw", "bron": "de engine zelf", "tekst": tekst}
+
+
+def gereedschap_inflatie() -> dict:
+    """De inflatie in Nederland volgens het CBS."""
+    gegevens = _haal_json(
+        "https://opendata.cbs.nl/ODataApi/odata/83131NED/TypedDataSet?"
+        "%24filter=startswith(Bestedingscategorieen%2C%27T001112%27)"
+        "&%24select=Perioden%2CCPI_1%2CJaarmutatieCPI_5%2CMaandmutatieCPI_3"
+    )
+    rijen = [rij for rij in ((gegevens or {}).get("value") or [])
+             if isinstance(rij.get("JaarmutatieCPI_5"), (int, float))]
+    if not rijen:
+        return {"naam": "inflatie", "bron": "opendata.cbs.nl", "tekst": "", "fout": "geen cijfers ontvangen"}
+    rijen.sort(key=lambda rij: str(rij.get("Perioden") or ""))
+    laatste = rijen[-1]
+    vorige = rijen[-2] if len(rijen) > 1 else laatste
+    periode = str(laatste.get("Perioden") or "")
+    maanden = ["januari", "februari", "maart", "april", "mei", "juni", "juli",
+               "augustus", "september", "oktober", "november", "december"]
+    maand = periode
+    of_maand = re.search(r"(\d{4})MM(\d{2})", periode)
+    if of_maand:
+        maand = f"{maanden[int(of_maand.group(2)) - 1]} {of_maand.group(1)}"
+    return {
+        "naam": "inflatie",
+        "bron": f"opendata.cbs.nl (tabel 83131NED, {periode})",
+        "tekst": (
+            f"Inflatie in Nederland ({maand}): {_getal(laatste.get('JaarmutatieCPI_5'), '%')} "
+            f"ten opzichte van een jaar eerder"
+            + (f"; vorige maand {_getal(vorige.get('JaarmutatieCPI_5'), '%')}." if vorige is not laatste else ".")
+            + f" Prijsindex {_getal(laatste.get('CPI_1'))} (2015 = 100)."
+        ),
+    }
+
+
+def gereedschap_wikipedia(onderwerp: str) -> dict:
+    """Een samenvatting van een artikel op Wikipedia (Nederlands)."""
+    onderwerp = (onderwerp or "").strip()
+    if not onderwerp:
+        return {"naam": "wikipedia", "bron": "nl.wikipedia.org", "tekst": "", "fout": "geen onderwerp opgegeven"}
+    gegevens = _haal_json(
+        "https://nl.wikipedia.org/w/api.php?action=query&format=json&generator=search"
+        f"&gsrsearch={urllib.parse.quote(onderwerp)}&gsrlimit=1&prop=extracts&exintro=1&explaintext=1"
+    )
+    paginas = ((gegevens or {}).get("query") or {}).get("pages") or {}
+    for pagina in paginas.values():
+        tekst = _schoon(str(pagina.get("extract") or ""))
+        if tekst:
+            return {
+                "naam": "wikipedia",
+                "bron": f"nl.wikipedia.org/wiki/{urllib.parse.quote(str(pagina.get('title') or onderwerp))}",
+                "tekst": f"{pagina.get('title')}: {_kort(tekst, 900)}",
+            }
+    return {"naam": "wikipedia", "bron": "nl.wikipedia.org", "tekst": "",
+            "fout": f"geen artikel gevonden over '{onderwerp}'"}
+
+
+def gereedschap_prijswacht(zoekterm: str) -> dict:
+    """Wat iets tweedehands kost op Marktplaats (goedkoopste advertenties)."""
+    zoekterm = (zoekterm or "").strip()
+    if not zoekterm:
+        return {"naam": "prijswacht", "bron": "marktplaats.nl", "tekst": "",
+                "fout": "noem wat je zoekt, bijvoorbeeld 'rtx 3060'"}
+    gegevens = _haal_json(
+        f"{MARKTPLAATS_LRP}?query={urllib.parse.quote(zoekterm)}&limit=100",
+        koppen={"Accept": "application/json"},
+    )
+    woorden = [woord.lower() for woord in re.findall(r"[a-z0-9]+", zoekterm.lower()) if len(woord) > 1]
+    advertenties = []
+    for advertentie in (gegevens or {}).get("listings") or []:
+        centen = (advertentie.get("priceInfo") or {}).get("priceCents")
+        if not isinstance(centen, (int, float)) or centen <= 0:
+            continue
+        titel_laag = str(advertentie.get("title") or "").lower()
+        if woorden and not all(woord in titel_laag for woord in woorden):
+            continue
+        advertenties.append(advertentie)
+    if not advertenties:
+        return {"naam": "prijswacht", "bron": "marktplaats.nl", "tekst": "",
+                "fout": f"geen advertenties met een prijs waarin alle woorden van '{zoekterm}' staan"}
+    advertenties.sort(key=lambda advertentie: (advertentie.get("priceInfo") or {}).get("priceCents") or 0)
+    if not advertenties:
+        return {"naam": "prijswacht", "bron": "marktplaats.nl", "tekst": "",
+                "fout": f"geen advertenties gevonden voor '{zoekterm}'"}
+    regels = []
+    for advertentie in advertenties:
+        prijsinfo = advertentie.get("priceInfo") or {}
+        centen = prijsinfo.get("priceCents")
+        if not isinstance(centen, (int, float)) or centen <= 0:
+            continue
+        plaats = (advertentie.get("location") or {}).get("cityName") or "?"
+        titel = _kort(str(advertentie.get("title") or "?"), 52)
+        regels.append(f"{_getal(centen / 100, ' euro')} — {titel} ({plaats})")
+        if len(regels) >= 5:
+            break
+    if not regels:
+        return {"naam": "prijswacht", "bron": "marktplaats.nl", "tekst": "",
+                "fout": f"geen advertenties met een prijs voor '{zoekterm}'"}
+    totaal = (gegevens or {}).get("totalResultCount")
+    prijzen = sorted(
+        (advertentie.get("priceInfo") or {}).get("priceCents") / 100 for advertentie in advertenties
+    )
+    mediaan = prijzen[len(prijzen) // 2] if prijzen else 0
+    return {
+        "naam": "prijswacht",
+        "bron": f"marktplaats.nl (lrp-api, {totaal} advertenties gevonden)",
+        "tekst": (
+            f"Marktplaats voor '{zoekterm}': mediaan {_getal(mediaan, ' euro')} "
+            f"over {len(prijzen)} advertenties. Goedkoopste: " + " | ".join(regels)
+        ),
+    }
+
+
+def _afsluitingen_ruw() -> str:
+    nu = time.time()
+    if AFSLUITINGEN_CACHE["ruw"] and nu - AFSLUITINGEN_CACHE["tijd"] < 900:
+        return str(AFSLUITINGEN_CACHE["ruw"])
+    ruw = gzip.decompress(_haal(AFSLUITINGEN_FEED)).decode("utf-8", "replace")
+    AFSLUITINGEN_CACHE["tijd"] = nu
+    AFSLUITINGEN_CACHE["ruw"] = ruw
+    return ruw
+
+
+def gereedschap_afsluitingen(weg: str) -> dict:
+    """Wegen die nu dicht zijn (NDW / Rijkswaterstaat)."""
+    try:
+        ruw = _afsluitingen_ruw()
+    except Exception as fout:
+        return {"naam": "afsluitingen", "bron": "opendata.ndw.nu", "tekst": "",
+                "fout": f"{type(fout).__name__}: {fout}"}
+    nu = datetime.datetime.now(datetime.timezone.utc)
+    gezocht = (weg or "").strip().upper()
+    gevonden = []
+    for blok in re.findall(r"<sit:situationRecord\b.*?</sit:situationRecord>", ruw, re.S):
+        if "roadClosed" not in blok and "closed" not in blok.lower():
+            continue
+        begin = re.search(r"<com:overallStartTime>([^<]+)", blok)
+        eind = re.search(r"<com:overallEndTime>([^<]+)", blok)
+        punt = re.search(r"<loc:latitude>([\d.\-]+)</loc:latitude>.*?<loc:longitude>([\d.\-]+)</loc:longitude>", blok, re.S)
+        if not punt:
+            continue
+        try:
+            start = datetime.datetime.fromisoformat(begin.group(1).replace("Z", "+00:00")) if begin else nu
+            stop = datetime.datetime.fromisoformat(eind.group(1).replace("Z", "+00:00")) if eind else nu
+        except ValueError:
+            continue
+        if stop < nu or start > nu + datetime.timedelta(days=2):
+            continue
+        waar = _weg_en_plaats(float(punt.group(1)), float(punt.group(2))) or "onbekende plek"
+        if gezocht and not re.search(rf"(?<![A-Z0-9]){re.escape(gezocht)}(?![0-9])", waar.upper()):
+            continue
+        tot = stop.astimezone().strftime("%d-%m %H:%M") if eind else "onbekend"
+        gevonden.append(f"{waar} tot {tot}")
+    if not gevonden:
+        return {
+            "naam": "afsluitingen",
+            "bron": "opendata.ndw.nu (NDW / Rijkswaterstaat)",
+            "tekst": f"Geen afsluitingen gevonden{' op ' + weg if weg else ''}.",
+        }
+    return {
+        "naam": "afsluitingen",
+        "bron": "opendata.ndw.nu (NDW / Rijkswaterstaat) en api.pdok.nl",
+        "tekst": f"Afgesloten: " + " | ".join(gevonden[:6]),
+    }
+
+
+def gereedschap_feed(adres: str) -> dict:
+    """De laatste berichten uit een rss- of atom-feed."""
+    adres = (adres or "").strip()
+    if not adres.startswith(("http://", "https://")):
+        return {"naam": "feed", "bron": "rss", "tekst": "",
+                "fout": "geef een volledig webadres van een feed, bijvoorbeeld https://feeds.nos.nl/nosnieuwsalgemeen"}
+    try:
+        ruw = _haal(adres, limiet=20).decode("utf-8", "replace")
+    except Exception as fout:
+        return {"naam": "feed", "bron": "rss", "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    titels = re.findall(r"<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", ruw, re.S)
+    titels = [_schoon(re.sub(r"<[^>]+>", " ", titel)) for titel in titels]
+    titels = [titel for titel in titels if titel and len(titel) > 8][:6]
+    if not titels:
+        return {"naam": "feed", "bron": "rss", "tekst": "",
+                "fout": "geen berichten gevonden in deze feed"}
+    return {
+        "naam": "feed",
+        "bron": adres,
+        "tekst": "Laatste berichten: " + " | ".join(titels),
+    }
+
 # Welke route bij welk gereedschap hoort: (/api/<naam>?q=...)
 GEREEDSCHAP_ROUTES = {
     "rekenen": (gereedschap_rekenen, "q"),
@@ -3889,6 +4289,16 @@ GEREEDSCHAP_ROUTES = {
     "weeralarm": (gereedschap_weeralarm, "q"),
     "buurtcijfers": (gereedschap_buurtcijfers, "gemeente"),
     "devhulp": (gereedschap_devhulp, "q"),
+    "uurverloop": (gereedschap_uurverloop, "plaats"),
+    "laadpalen": (gereedschap_laadpalen, "plaats"),
+    "parkeren": (gereedschap_parkeren, "plaats"),
+    "vorigjaar": (gereedschap_vorigjaar, "plaats"),
+    "btw": (gereedschap_btw, "q"),
+    "inflatie": (gereedschap_inflatie, None),
+    "wikipedia": (gereedschap_wikipedia, "q"),
+    "prijswacht": (gereedschap_prijswacht, "q"),
+    "afsluitingen": (gereedschap_afsluitingen, "weg"),
+    "feed": (gereedschap_feed, "url"),
 }
 
 
@@ -3936,6 +4346,16 @@ GEREEDSCHAP_SOORTEN = {
     "weeralarm": "officiële weerswaarschuwingen (meteoalarm.org)",
     "buurtcijfers": "leeftijdsopbouw en dichtheid van een gemeente (CBS)",
     "devhulp": "hashes, base64, json, kleurcontrast en QR (de engine zelf)",
+    "uurverloop": "het weer per uur vandaag (open-meteo.com)",
+    "laadpalen": "laadpalen in de buurt (openstreetmap.org)",
+    "parkeren": "parkeergarages en -terreinen in de buurt (openstreetmap.org)",
+    "vorigjaar": "het weer op deze dag vorig jaar (open-meteo.com archief)",
+    "btw": "btw en percentages uitrekenen (de engine zelf)",
+    "inflatie": "de inflatie in Nederland (CBS)",
+    "wikipedia": "een samenvatting van Wikipedia (nl.wikipedia.org)",
+    "prijswacht": "wat iets tweedehands kost op Marktplaats",
+    "afsluitingen": "wegen die nu dicht zijn (NDW/Rijkswaterstaat)",
+    "feed": "de laatste berichten uit een rss-feed",
 }
 
 
@@ -3959,6 +4379,18 @@ def _plaats_uit(tekst: str) -> str:
         if woord.lower() not in ("wat", "hoe", "waar", "welke", "wie", "geef", "vertel", "het", "weer"):
             return woord
     return ""
+
+
+def _weg_uit(tekst: str) -> str:
+    """Een wegnummer uit de vraag halen (A2, A76, N242)."""
+    gevonden = re.search(r"\b([AN]\s?\d{1,3})\b", tekst.upper())
+    return gevonden.group(1).replace(" ", "") if gevonden else ""
+
+
+def _adres_uit(tekst: str) -> str:
+    """Een webadres uit de vraag halen."""
+    gevonden = re.search(r"https?://[^\s,;]+", tekst)
+    return gevonden.group(0) if gevonden else ""
 
 
 def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
@@ -4025,6 +4457,16 @@ def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
         ("/horeca", "horeca"),
         ("/buurtcijfers", "buurtcijfers"),
         ("/devhulp", "devhulp"),
+        ("/uurverloop", "uurverloop"),
+        ("/laadpalen", "laadpalen"),
+        ("/parkeren", "parkeren"),
+        ("/vorigjaar", "vorigjaar"),
+        ("/btw", "btw"),
+        ("/inflatie", "inflatie"),
+        ("/wiki2", "wikipedia"),
+        ("/prijswacht", "prijswacht"),
+        ("/afsluitingen", "afsluitingen"),
+        ("/feed", "feed"),
     ):
         if laag.startswith(gebod):
             argument = tekst[len(gebod) :].strip(" :?")
@@ -4060,7 +4502,8 @@ def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
         return [("lucht", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
     if re.search(r"\b(zon op|zon onder|zonsopgang|zonsondergang|hoe laat gaat de zon)\b", laag):
         return [("zon", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
-    if re.search(r"\b(valuta|wisselkoers|dollar|pond|yen|kronen|euro)\b", laag) and re.search(r"\d", laag):
+    if (re.search(r"\b(valuta|wisselkoers|dollar|pond|yen|kronen|euro)\b", laag)
+            and re.search(r"\d", laag) and not re.search(r"\b(btw|exclusief|inclusief)\b", laag)):
         return [("valuta", tekst)]
     if re.search(r"\b(bitcoin|ethereum|solana|dogecoin|crypto|litecoin|xrp)\b", laag):
         return [("crypto", tekst)]
@@ -4120,6 +4563,26 @@ def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
         return [("buurtcijfers", tekst)]
     if re.search(r"\b(sha256|sha1|md5|base64|json formatteren|kleurcontrast|qr-code|qrcode)\b", laag):
         return [("devhulp", tekst)]
+    if re.search(r"\b(per uur|uurverloop|wanneer is het droog|komende uren|vanavond droog)\b", laag):
+        return [("uurverloop", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\b(laadpaal\w*|laadpunt\w*|oplad\w*|auto laden|mijn auto|accu laden|stekker)\b", laag):
+        return [("laadpalen", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\b(parkeren|parkeergarage\w*|parkeerplaats\w*|parkeertarief\w*)\b", laag):
+        return [("parkeren", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\b(vorig jaar|vorige jaar|een jaar geleden|toen (was|het))\b", laag):
+        return [("vorigjaar", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\b(btw|21%|9%|exclusief|inclusief)\b", laag) and re.search(r"\d", laag):
+        return [("btw", tekst)]
+    if re.search(r"\b(inflatie|prijsstijging|duurder geworden|cpi)\b", laag):
+        return [("inflatie", "")]
+    if re.search(r"\b(wikipedia|encyclopedie|wie is|wat is een)\b", laag):
+        return [("wikipedia", tekst)]
+    if re.search(r"\b(marktplaats|tweedehands|wat kost een gebruikt|prijzen van)\b", laag):
+        return [("prijswacht", tekst)]
+    if re.search(r"\b(afgesloten|afsluiting\w*|dicht|wegwerkzaamheden)\b", laag):
+        return [("afsluitingen", _weg_uit(tekst))]
+    if re.search(r"\b(rss|feed|laatste berichten van)\b", laag):
+        return [("feed", _adres_uit(tekst))]
 
     keuzes: list[tuple[str, str]] = []
     if re.search(r"\b(weer|weersverwachting|weersvoorspelling|temperatuur|graden|regen|sneeuw|zonnig|bewolkt|waait|fris|koud|warm)\b", laag):
@@ -4233,6 +4696,26 @@ def gereedschap_uitvoeren(keuzes: list[tuple[str, str]]) -> list[dict]:
                 uitkomsten.append(gereedschap_buurtcijfers(argument))
             elif soort == "devhulp":
                 uitkomsten.append(gereedschap_devhulp(argument))
+            elif soort == "uurverloop":
+                uitkomsten.append(gereedschap_uurverloop(argument))
+            elif soort == "laadpalen":
+                uitkomsten.append(gereedschap_laadpalen(argument))
+            elif soort == "parkeren":
+                uitkomsten.append(gereedschap_parkeren(argument))
+            elif soort == "vorigjaar":
+                uitkomsten.append(gereedschap_vorigjaar(argument))
+            elif soort == "btw":
+                uitkomsten.append(gereedschap_btw(argument))
+            elif soort == "inflatie":
+                uitkomsten.append(gereedschap_inflatie())
+            elif soort == "wikipedia":
+                uitkomsten.append(gereedschap_wikipedia(argument))
+            elif soort == "prijswacht":
+                uitkomsten.append(gereedschap_prijswacht(argument))
+            elif soort == "afsluitingen":
+                uitkomsten.append(gereedschap_afsluitingen(argument))
+            elif soort == "feed":
+                uitkomsten.append(gereedschap_feed(argument))
         except Exception as fout:  # nooit de vraag laten stuklopen op gereedschap
             uitkomsten.append(
                 {"naam": soort, "bron": "", "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}

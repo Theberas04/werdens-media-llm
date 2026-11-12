@@ -101,7 +101,7 @@ is of hoe laat het is. De engine haalt dat zelf op en zet het boven de vraag, du
 het model hoeft niets te beslissen — dat is precies waarom het ook met een klein
 model werkt.
 
-Er zijn drieënveertig gereedschappen, in vijf groepen.
+Er zijn drieënvijftig gereedschappen, in zes groepen.
 
 **Zonder internet** — de engine rekent zelf, dus altijd goed en direct:
 
@@ -159,6 +159,21 @@ Er zijn drieënveertig gereedschappen, in vijf groepen.
 | buurtcijfers | CBS Open Data | *hoeveel 65-plussers wonen in Sittard?* |
 | devhulp | de engine zelf | *sha256 van hallo*, *contrast tussen #fff en #1e73be* |
 
+**Dagelijks gebruik en prijzen:**
+
+| Gereedschap | Bron | Voorbeeldvraag |
+|---|---|---|
+| uurverloop | Open-Meteo | *wanneer is het droog vandaag?* |
+| vorigjaar | Open-Meteo archief | *hoe warm was het vorig jaar op deze dag?* |
+| btw | de engine zelf | *btw over 250 euro*, *250 inclusief btw* |
+| inflatie | CBS | *wat is de inflatie?* |
+| wikipedia | nl.wikipedia.org | *wie is Rijkswaterstaat?* |
+| prijswacht | Marktplaats | *wat kost een rtx 3060 12gb tweedehands?* |
+| afsluitingen | NDW / Rijkswaterstaat | *welke weg is afgesloten?* |
+| laadpalen | OpenStreetMap | *waar kan ik mijn auto laden?* |
+| parkeren | OpenStreetMap | *waar kan ik parkeren in Utrecht?* |
+| feed | elke rss-feed | *laatste berichten van https://feeds.nos.nl/nosnieuwsalgemeen* |
+
 **Je eigen apps:**
 
 | Gereedschap | Wat het leest | Voorbeeldvraag |
@@ -176,6 +191,10 @@ De notities en de documenten lezen alleen wat je zelf aanwijst: zet
 mogen, gescheiden door een dubbele punt). Zonder die instelling zegt het
 gereedschap eerlijk dat het niets kan lezen in plaats van te gokken. Voor de
 boodschappenlijst wijst `WLLM_VOORRAAD_DB` naar de database van VoorraadThuis.
+
+De gereedschappen die OpenStreetMap gebruiken (horeca, laadpalen, parkeren) kunnen
+traag zijn of tijdelijk niets teruggeven: de gratis Overpass-servers zitten soms vol.
+De engine zegt dat dan eerlijk en probeert drie spiegels na elkaar.
 
 Documenten worden gelezen als txt, md, docx en pdf. Let op: een pdf die zijn
 tekst met een eigen lettercode opslaat — zoals alles wat Chromium maakt — kan de
@@ -202,6 +221,9 @@ curl 'http://127.0.0.1:11434/api/cbs?gemeente=Sittard'
 curl 'http://127.0.0.1:11434/api/weeralarm'
 curl 'http://127.0.0.1:11434/api/bruggen'
 curl 'http://127.0.0.1:11434/api/buurtcijfers?gemeente=Sittard'
+curl 'http://127.0.0.1:11434/api/prijswacht?q=rtx%203060'
+curl 'http://127.0.0.1:11434/api/inflatie'
+curl 'http://127.0.0.1:11434/api/btw?q=btw%20over%20250%20euro'
 curl 'http://127.0.0.1:11434/api/gereedschap'      # wat er beschikbaar is
 ```
 
