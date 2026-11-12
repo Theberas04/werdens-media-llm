@@ -101,7 +101,7 @@ is of hoe laat het is. De engine haalt dat zelf op en zet het boven de vraag, du
 het model hoeft niets te beslissen — dat is precies waarom het ook met een klein
 model werkt.
 
-Er zijn vierendertig gereedschappen, in vier groepen.
+Er zijn drieënveertig gereedschappen, in vijf groepen.
 
 **Zonder internet** — de engine rekent zelf, dus altijd goed en direct:
 
@@ -145,6 +145,20 @@ Er zijn vierendertig gereedschappen, in vier groepen.
 | boek | [Open Library](https://openlibrary.org) | *wie schreef De Avonden?* |
 | vliegtuigen | [OpenSky](https://opensky-network.org) | *hoeveel vliegtuigen hangen er boven Nederland?* |
 
+**Buurt, gezondheid en hulpjes:**
+
+| Gereedschap | Bron | Voorbeeldvraag |
+|---|---|---|
+| aardbevingen | [EMSC](https://www.seismicportal.eu) | *waren er bevingen in Groningen?* |
+| hooikoorts | Open-Meteo (pollen + UV) | *is het hooikoortsweer?* |
+| bruggen | NDW / Rijkswaterstaat | *gaat de brug bij Alphen open?* |
+| verwachting | Open-Meteo | *wat is de verwachting voor veertien dagen?* |
+| gasprijs | EnergyZero | *wat kost gas nu?* |
+| horeca | [OpenStreetMap](https://www.openstreetmap.org) | *welke pizzeria zit er in Utrecht?* |
+| weeralarm | [MeteoAlarm](https://www.meteoalarm.org) | *is er code geel vandaag?* |
+| buurtcijfers | CBS Open Data | *hoeveel 65-plussers wonen in Sittard?* |
+| devhulp | de engine zelf | *sha256 van hallo*, *contrast tussen #fff en #1e73be* |
+
 **Je eigen apps:**
 
 | Gereedschap | Wat het leest | Voorbeeldvraag |
@@ -185,6 +199,9 @@ curl 'http://127.0.0.1:11434/api/water?plaats=Vlissingen'
 curl 'http://127.0.0.1:11434/api/stroomprijs'
 curl 'http://127.0.0.1:11434/api/afstand?q=van%20Utrecht%20naar%20Maastricht'
 curl 'http://127.0.0.1:11434/api/cbs?gemeente=Sittard'
+curl 'http://127.0.0.1:11434/api/weeralarm'
+curl 'http://127.0.0.1:11434/api/bruggen'
+curl 'http://127.0.0.1:11434/api/buurtcijfers?gemeente=Sittard'
 curl 'http://127.0.0.1:11434/api/gereedschap'      # wat er beschikbaar is
 ```
 

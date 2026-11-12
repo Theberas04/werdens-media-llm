@@ -1554,13 +1554,14 @@ WMO = {
 }
 
 
-def _haal(url: str, gegevens: bytes | None = None, koppen: dict | None = None) -> bytes:
+def _haal(url: str, gegevens: bytes | None = None, koppen: dict | None = None,
+          limiet: float | None = None) -> bytes:
     """Haal een adres op. Korte tijd, eigen naam, en nooit stil blijven hangen."""
     koppen = dict(koppen or {})
     koppen.setdefault("User-Agent", GEREEDSCHAP_UA)
     koppen.setdefault("Accept-Language", "nl-NL,nl;q=0.9,en;q=0.5")
     verzoek = urllib.request.Request(url, data=gegevens, headers=koppen)
-    with urllib.request.urlopen(verzoek, timeout=GEREEDSCHAP_TIMEOUT) as antwoord:
+    with urllib.request.urlopen(verzoek, timeout=limiet or GEREEDSCHAP_TIMEOUT) as antwoord:
         return antwoord.read()
 
 
@@ -3398,6 +3399,456 @@ def gereedschap_document(zoekterm: str) -> dict:
     return {"naam": "document", "bron": "eigen documentenmap",
             "tekst": f"Niets gevonden over '{zoekterm}' in {len(bestanden)} documenten."}
 
+# ---- E. aardbevingen, hooikoorts, bruggen, verwachting, gas, horeca,
+#         weeralarm, buurtcijfers en ontwikkelaarshulpjes
+
+EMSC_API = "https://www.seismicportal.eu/fdsnws/event/1/query"
+METEOALARM = "https://feeds.meteoalarm.org/api/v1/warnings/feeds-netherlands"
+BRUGGEN_FEED = "https://opendata.ndw.nu/planningsfeed_brugopeningen.xml.gz"
+BRUGGEN_CACHE: dict = {"tijd": 0.0, "ruw": ""}
+
+
+def gereedschap_aardbevingen(gebied: str) -> dict:
+    """Aardbevingen in Nederland en omstreken, laatste drie maanden (EMSC)."""
+    nu = datetime.datetime.now(datetime.timezone.utc)
+    begin = (nu - datetime.timedelta(days=90)).strftime("%Y-%m-%d")
+    gegevens = _haal_json(
+        f"{EMSC_API}?format=json&minlatitude=50.6&maxlatitude=53.7&minlongitude=3.2&maxlongitude=7.3"
+        f"&starttime={begin}&minmagnitude=0.5&limit=8&orderby=time"
+    )
+    bevingen = (gegevens or {}).get("features") or []
+    if not bevingen:
+        return {
+            "naam": "aardbevingen",
+            "bron": "seismicportal.eu (EMSC)",
+            "tekst": "Geen aardbevingen boven magnitude 0,5 in Nederland en omstreken in de laatste drie maanden.",
+        }
+    regels = []
+    for beving in bevingen[:6]:
+        eigenschappen = beving.get("properties") or {}
+        moment = str(eigenschappen.get("time") or "")[:10]
+        regels.append(
+            f"M{_getal(eigenschappen.get('mag'))} {eigenschappen.get('flynn_region') or '?'} ({moment})"
+        )
+    return {
+        "naam": "aardbevingen",
+        "bron": "seismicportal.eu (EMSC, Europees seismologisch centrum)",
+        "tekst": f"Aardbevingen in Nederland en omstreken, laatste drie maanden: " + " | ".join(regels),
+    }
+
+
+def gereedschap_hooikoorts(plaats: str) -> dict:
+    """Hooikoorts (pollen) en de UV-index (Open-Meteo)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "hooikoorts", "bron": "open-meteo.com", "tekst": "", "fout": "geen plaats opgegeven"}
+    try:
+        breedte, lengte, nette = _coordinaten(plaats)
+    except Exception as fout:
+        return {"naam": "hooikoorts", "bron": "open-meteo.com", "tekst": "", "fout": str(fout)}
+    gegevens = _haal_json(
+        "https://air-quality-api.open-meteo.com/v1/air-quality?"
+        f"latitude={breedte}&longitude={lengte}"
+        "&current=uv_index,grass_pollen,birch_pollen,alder_pollen,mugwort_pollen,ragweed_pollen,olive_pollen"
+        "&timezone=Europe/Amsterdam"
+    )
+    nu = (gegevens or {}).get("current") or {}
+    if not nu:
+        return {"naam": "hooikoorts", "bron": "open-meteo.com", "tekst": "", "fout": "geen gegevens"}
+    namen = {
+        "grass_pollen": "gras", "birch_pollen": "berk", "alder_pollen": "els",
+        "mugwort_pollen": "bijvoet", "ragweed_pollen": "ambrosia", "olive_pollen": "olijf",
+    }
+    actief = []
+    for sleutel, naam in namen.items():
+        waarde = nu.get(sleutel)
+        if isinstance(waarde, (int, float)) and waarde > 0:
+            actief.append(f"{naam} {_getal(waarde, ' korrels/m³')}")
+    uv = nu.get("uv_index")
+    uv_tekst = ""
+    if isinstance(uv, (int, float)):
+        oordeel = "laag" if uv < 3 else "matig" if uv < 6 else "hoog" if uv < 8 else "zeer hoog"
+        uv_tekst = f" UV-index {_getal(uv)} ({oordeel})."
+    return {
+        "naam": "hooikoorts",
+        "bron": "open-meteo.com (CAMS-pollenmodel)",
+        "tekst": (
+            f"Pollen bij {nette}: " + (", ".join(actief) if actief else "geen noemenswaardige pollen") + "."
+            + uv_tekst
+        ),
+    }
+
+
+def _bruggen_ruw() -> str:
+    nu = time.time()
+    if BRUGGEN_CACHE["ruw"] and nu - BRUGGEN_CACHE["tijd"] < 600:
+        return str(BRUGGEN_CACHE["ruw"])
+    ruw = gzip.decompress(_haal(BRUGGEN_FEED)).decode("utf-8", "replace")
+    BRUGGEN_CACHE["tijd"] = nu
+    BRUGGEN_CACHE["ruw"] = ruw
+    return ruw
+
+
+def gereedschap_bruggen(plaats: str) -> dict:
+    """Brugopeningen in de komende uren (NDW / Rijkswaterstaat)."""
+    try:
+        ruw = _bruggen_ruw()
+    except Exception as fout:
+        return {"naam": "bruggen", "bron": "opendata.ndw.nu", "tekst": "",
+                "fout": f"{type(fout).__name__}: {fout}"}
+    nu = datetime.datetime.now(datetime.timezone.utc)
+    grens = nu + datetime.timedelta(hours=8)
+    gezocht = (plaats or "").strip().lower()
+    openingen = []
+    for blok in re.findall(r"<sit:situationRecord\b.*?</sit:situationRecord>", ruw, re.S):
+        if "bridgeSwingInOperation" not in blok and "bridgeOpen" not in blok:
+            continue
+        begin = re.search(r"<com:overallStartTime>([^<]+)", blok)
+        eind = re.search(r"<com:overallEndTime>([^<]+)", blok)
+        punt = re.search(r"<loc:latitude>([\d.\-]+)</loc:latitude>.*?<loc:longitude>([\d.\-]+)</loc:longitude>", blok, re.S)
+        if not (begin and punt):
+            continue
+        try:
+            start = datetime.datetime.fromisoformat(begin.group(1).replace("Z", "+00:00"))
+            stop = datetime.datetime.fromisoformat(eind.group(1).replace("Z", "+00:00")) if eind else start
+        except ValueError:
+            continue
+        if stop < nu or start > grens:
+            continue
+        openingen.append((start, stop, float(punt.group(1)), float(punt.group(2))))
+    openingen.sort()
+    if not openingen:
+        return {
+            "naam": "bruggen",
+            "bron": "opendata.ndw.nu (NDW / Rijkswaterstaat)",
+            "tekst": "Geen geplande brugopeningen in de komende acht uur.",
+        }
+    regels = []
+    for start, stop, breedte, lengte in openingen[:6]:
+        waar = _weg_en_plaats(breedte, lengte) or "onbekende plek"
+        if gezocht and gezocht not in waar.lower():
+            continue
+        regels.append(f"{waar}: {start.astimezone().strftime('%H:%M')} tot {stop.astimezone().strftime('%H:%M')}")
+    if not regels:
+        return {
+            "naam": "bruggen",
+            "bron": "opendata.ndw.nu (NDW / Rijkswaterstaat)",
+            "tekst": f"Geen brugopeningen gevonden bij '{plaats}' in de komende acht uur.",
+        }
+    return {
+        "naam": "bruggen",
+        "bron": "opendata.ndw.nu (NDW / Rijkswaterstaat) en api.pdok.nl",
+        "tekst": "Brugopeningen: " + " | ".join(regels),
+    }
+
+
+def gereedschap_verwachting(plaats: str) -> dict:
+    """De verwachting voor veertien dagen (Open-Meteo)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "verwachting", "bron": "open-meteo.com", "tekst": "", "fout": "geen plaats opgegeven"}
+    try:
+        breedte, lengte, nette = _coordinaten(plaats)
+    except Exception as fout:
+        return {"naam": "verwachting", "bron": "open-meteo.com", "tekst": "", "fout": str(fout)}
+    gegevens = _haal_json(
+        "https://api.open-meteo.com/v1/forecast?"
+        f"latitude={breedte}&longitude={lengte}"
+        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max"
+        "&forecast_days=14&timezone=Europe/Amsterdam"
+    )
+    dagen = (gegevens or {}).get("daily") or {}
+    tijden = dagen.get("time") or []
+    if not tijden:
+        return {"naam": "verwachting", "bron": "open-meteo.com", "tekst": "", "fout": "geen gegevens"}
+    regels = []
+    for nummer, dag in enumerate(tijden):
+        code = (dagen.get("weather_code") or [0])[nummer]
+        regels.append(
+            f"{dag[8:10]}-{dag[5:7]}: {WMO.get(int(code or 0), 'onbekend')}, "
+            f"{_getal((dagen.get('temperature_2m_min') or [0])[nummer])} tot "
+            f"{_getal((dagen.get('temperature_2m_max') or [0])[nummer], ' °C')}, "
+            f"{_getal((dagen.get('precipitation_sum') or [0])[nummer], ' mm')} regen"
+        )
+    return {
+        "naam": "verwachting",
+        "bron": "open-meteo.com",
+        "tekst": f"Verwachting voor {nette}, veertien dagen: " + " | ".join(regels),
+    }
+
+
+def gereedschap_gasprijs() -> dict:
+    """De gasprijs per kuub, vandaag en morgen (EnergyZero, met btw)."""
+    nu = datetime.datetime.now(datetime.timezone.utc)
+    begin = nu.replace(hour=0, minute=0, second=0, microsecond=0)
+    eind = begin + datetime.timedelta(days=2)
+    gegevens = _haal_json(
+        f"{ENERGIE_API}?fromDate={begin.strftime('%Y-%m-%dT%H:%M:%S.000Z')}"
+        f"&tillDate={eind.strftime('%Y-%m-%dT%H:%M:%S.000Z')}"
+        "&interval=4&usageType=2&inclBtw=true"
+    )
+    prijzen = []
+    for punt in (gegevens or {}).get("Prices") or []:
+        moment = str(punt.get("readingDate") or "")
+        bedrag = punt.get("price")
+        if moment and isinstance(bedrag, (int, float)):
+            prijzen.append((moment, float(bedrag)))
+    if not prijzen:
+        return {"naam": "gasprijs", "bron": "energyzero.nl", "tekst": "", "fout": "geen prijzen ontvangen"}
+    prijzen.sort()
+    nu_iso = nu.strftime("%Y-%m-%dT%H:00")
+    huidig = next((prijs for moment, prijs in prijzen if moment[:13] == nu_iso), prijzen[0][1])
+    laagste = min(prijs for _, prijs in prijzen)
+    hoogste = max(prijs for _, prijs in prijzen)
+    return {
+        "naam": "gasprijs",
+        "bron": "energyzero.nl (inclusief btw)",
+        "tekst": (
+            f"Gasprijs: nu {huidig:.2f}".replace(".", ",") + " euro per m³, "
+            + f"laagste {laagste:.2f}".replace(".", ",") + f", hoogste {hoogste:.2f}".replace(".", ",")
+            + " (vandaag en morgen)."
+        ),
+    }
+
+
+AMENITY = {
+    "pizzeria": "restaurant", "pizza": "restaurant", "restaurant": "restaurant",
+    "eetcafe": "cafe", "café": "cafe", "kroeg": "pub", "bar": "bar",
+    "bakker": "bakery", "bakkerij": "bakery", "slager": "butcher", "supermarkt": "supermarket",
+    "apotheek": "pharmacy", "huisarts": "doctors", "tandarts": "dentist",
+    "hotel": "hotel", "cafeetje": "cafe", "koffie": "cafe", "snackbar": "fast_food",
+    "frituur": "fast_food", "fastfood": "fast_food", "ijs": "ice_cream", "ijssalon": "ice_cream",
+}
+
+
+def gereedschap_horeca(zoekterm: str) -> dict:
+    """Wat er in de buurt zit: horeca en winkels (OpenStreetMap)."""
+    laag = (zoekterm or "").strip().lower()
+    if not laag:
+        return {"naam": "horeca", "bron": "openstreetmap.org", "tekst": "",
+                "fout": "noem wat je zoekt, bijvoorbeeld 'pizzeria in Utrecht'"}
+    soort = ""
+    for woord, waarde in AMENITY.items():
+        if woord in laag:
+            soort = waarde
+            break
+    if not soort:
+        soort = "restaurant"
+    plaats = _plaats_uit(zoekterm) or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "horeca", "bron": "openstreetmap.org", "tekst": "",
+                "fout": "noem ook een plaats, bijvoorbeeld 'pizzeria in Utrecht'"}
+    try:
+        breedte, lengte, nette = _coordinaten(plaats)
+    except Exception as fout:
+        return {"naam": "horeca", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    vraag = (
+        f'[out:json][timeout:25];node["amenity"="{soort}"](around:1500,{breedte},{lengte});out 12;'
+    )
+    try:
+        gegevens = json.loads(
+            _haal(
+                "https://overpass-api.de/api/interpreter",
+                gegevens=urllib.parse.urlencode({"data": vraag}).encode("utf-8"),
+                koppen={"Content-Type": "application/x-www-form-urlencoded"},
+                limiet=40,
+            ).decode("utf-8", "replace")
+        )
+    except Exception:
+        gegevens = json.loads(
+            _haal(
+                "https://overpass.kumi.systems/api/interpreter",
+                gegevens=urllib.parse.urlencode({"data": vraag}).encode("utf-8"),
+                koppen={"Content-Type": "application/x-www-form-urlencoded"},
+                limiet=40,
+            ).decode("utf-8", "replace")
+        )
+    plekken = []
+    for element in (gegevens or {}).get("elements") or []:
+        naam = (element.get("tags") or {}).get("name")
+        if not naam:
+            continue
+        punt_lat = element.get("lat")
+        punt_lon = element.get("lon")
+        afstand = ""
+        if isinstance(punt_lat, (int, float)) and isinstance(punt_lon, (int, float)):
+            dy = (punt_lat - breedte) * 111
+            dx = (punt_lon - lengte) * 111 * 0.62
+            afstand = f" ({_getal((dy * dy + dx * dx) ** 0.5, ' km')})"
+        plekken.append(f"{naam}{afstand}")
+    if not plekken:
+        return {
+            "naam": "horeca",
+            "bron": "openstreetmap.org (Overpass)",
+            "tekst": f"Geen {soort} gevonden binnen 1,5 km van {nette}.",
+        }
+    return {
+        "naam": "horeca",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": f"{soort.capitalize()} binnen 1,5 km van {nette}: " + ", ".join(plekken[:8]),
+    }
+
+
+def gereedschap_weeralarm(plaats: str) -> dict:
+    """Officiële weerswaarschuwingen voor Nederland (MeteoAlarm)."""
+    gegevens = _haal_json(METEOALARM)
+    waarschuwingen = (gegevens or {}).get("warnings") or []
+    nu = datetime.datetime.now(datetime.timezone.utc)
+    regels = []
+    gezien = set()
+    for waarschuwing in waarschuwingen:
+        for info in (waarschuwing.get("alert") or {}).get("info") or []:
+            if str(info.get("language") or "nl").lower().startswith("en"):
+                continue
+            afloop = str(info.get("expires") or info.get("onset") or "")
+            try:
+                if afloop and datetime.datetime.fromisoformat(afloop.replace("Z", "+00:00")) < nu:
+                    continue
+            except ValueError:
+                pass
+            gebieden = ", ".join(
+                str(gebied.get("areaDesc") or "") for gebied in (info.get("area") or [])
+            )[:110]
+            sleutel = (info.get("event"), gebieden, info.get("severity"))
+            if sleutel in gezien:
+                continue
+            gezien.add(sleutel)
+            regels.append(
+                f"{info.get('event') or 'waarschuwing'} "
+                f"({info.get('severity') or '?'}) voor {gebieden or 'Nederland'}"
+            )
+    if not regels:
+        return {
+            "naam": "weeralarm",
+            "bron": "meteoalarm.org (KNMI levert de Nederlandse waarschuwingen)",
+            "tekst": "Er zijn nu geen officiële weerswaarschuwingen voor Nederland.",
+        }
+    return {
+        "naam": "weeralarm",
+        "bron": "meteoalarm.org (KNMI levert de Nederlandse waarschuwingen)",
+        "tekst": f"Weerswaarschuwingen ({len(regels)}): " + " | ".join(regels[:5]),
+    }
+
+
+def gereedschap_buurtcijfers(plaats: str) -> dict:
+    """Inwoners, leeftijdsopbouw en dichtheid van een gemeente (CBS)."""
+    plaats = (plaats or "").strip()
+    if not plaats:
+        return {"naam": "buurtcijfers", "bron": "opendata.cbs.nl", "tekst": "", "fout": "geen gemeente opgegeven"}
+    filter_ = urllib.parse.quote(f"startswith(Title,'{plaats}')", safe="()'")
+    regio = _haal_json(f"https://opendata.cbs.nl/ODataApi/odata/70072ned/RegioS?$filter={filter_}&$top=10")
+    kandidaten = [rij for rij in ((regio or {}).get("value") or []) if str(rij.get("Key") or "").startswith("GM")]
+    if not kandidaten:
+        return {"naam": "buurtcijfers", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": f"geen gemeente gevonden die begint met '{plaats}'"}
+    kandidaten.sort(key=lambda rij: (str(rij.get("Title")) != plaats, -len(str(rij.get("Title")))))
+    code = str(kandidaten[0].get("Key") or "")
+    naam = str(kandidaten[0].get("Title") or plaats)
+    velden = "Perioden,TotaleBevolking_1,k_0Tot15Jaar_4,k_65Tot80Jaar_8,k_80JaarOfOuder_9,Bevolkingsdichtheid_27"
+    gegevens = _haal_json(
+        "https://opendata.cbs.nl/ODataApi/odata/70072ned/TypedDataSet?"
+        f"%24filter=RegioS%20eq%20%27{code}%27&%24select={velden}"
+    )
+    waarden = [rij for rij in ((gegevens or {}).get("value") or [])
+               if isinstance(rij.get("TotaleBevolking_1"), (int, float))]
+    if not waarden:
+        return {"naam": "buurtcijfers", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": f"geen cijfers voor {naam}"}
+    rij = max(waarden, key=lambda r: str(r.get("Perioden") or ""))
+    totaal = float(rij.get("TotaleBevolking_1") or 0)
+    jong = float(rij.get("k_0Tot15Jaar_4") or 0)
+    oud = float(rij.get("k_65Tot80Jaar_8") or 0) + float(rij.get("k_80JaarOfOuder_9") or 0)
+    dichtheid = rij.get("Bevolkingsdichtheid_27")
+    return {
+        "naam": "buurtcijfers",
+        "bron": f"opendata.cbs.nl (tabel 70072ned, {rij.get('Perioden')})",
+        "tekst": (
+            f"{naam}: {_getal(totaal, komma=False)} inwoners, "
+            f"{_getal(jong / totaal * 100 if totaal else 0, '% onder 15')}, "
+            f"{_getal(oud / totaal * 100 if totaal else 0, '% 65 en ouder')}"
+            + (f", {_getal(dichtheid, komma=False)} inwoners per km²" if isinstance(dichtheid, (int, float)) else "")
+            + "."
+        ),
+    }
+
+
+def gereedschap_devhulp(verzoek: str) -> dict:
+    """Hulpjes voor ontwikkelwerk: hashes, base64, json, kleurcontrast en QR."""
+    verzoek = (verzoek or "").strip()
+    if not verzoek:
+        return {"naam": "devhulp", "bron": "de engine zelf", "tekst": "",
+                "fout": "zeg wat je wilt, bijvoorbeeld 'sha256 van hallo'"}
+    laag = verzoek.lower()
+    inhoud = re.sub(
+        r"^(maak|bereken|geef|doe)?\s*(een\s+)?(sha256|sha1|md5|base64|json|contrast|qr)\s*"
+        r"(van|voor|tussen|formatteren|decoderen|coderen)?\s*",
+        "",
+        verzoek,
+        flags=re.I,
+    ).strip(" :?")
+    if "sha256" in laag or "sha1" in laag or "md5" in laag:
+        soort = "sha256" if "sha256" in laag else ("sha1" if "sha1" in laag else "md5")
+        waarde = hashlib.new(soort, inhoud.encode("utf-8")).hexdigest()
+        return {"naam": "devhulp", "bron": "de engine zelf", "tekst": f"{soort} van '{inhoud}': {waarde}"}
+    if "base64" in laag:
+        if "decode" in laag or "decoderen" in laag:
+            try:
+                tekst = base64.b64decode(inhoud + "=" * (-len(inhoud) % 4)).decode("utf-8", "replace")
+            except Exception as fout:
+                return {"naam": "devhulp", "bron": "de engine zelf", "tekst": "",
+                        "fout": f"{type(fout).__name__}: {fout}"}
+            return {"naam": "devhulp", "bron": "de engine zelf", "tekst": f"base64 gedecodeerd: {tekst}"}
+        waarde = base64.b64encode(inhoud.encode("utf-8")).decode("ascii")
+        return {"naam": "devhulp", "bron": "de engine zelf", "tekst": f"base64 van '{inhoud}': {waarde}"}
+    if "json" in laag:
+        try:
+            gegevens = json.loads(inhoud)
+        except Exception as fout:
+            return {"naam": "devhulp", "bron": "de engine zelf", "tekst": "",
+                    "fout": f"geen geldige json ({type(fout).__name__})"}
+        return {
+            "naam": "devhulp",
+            "bron": "de engine zelf",
+            "tekst": json.dumps(gegevens, ensure_ascii=False, indent=2)[:900],
+        }
+    if "contrast" in laag:
+        kleuren = re.findall(r"#?([0-9a-f]{6}|[0-9a-f]{3})\b", laag)
+        if len(kleuren) < 2:
+            return {"naam": "devhulp", "bron": "de engine zelf", "tekst": "",
+                    "fout": "noem twee kleuren, bijvoorbeeld 'contrast tussen #ffffff en #1e73be'"}
+
+        def _helderheid(waarde: str) -> float:
+            waarde = waarde if len(waarde) == 6 else "".join(teken * 2 for teken in waarde)
+            rood, groen, blauw = (int(waarde[i:i + 2], 16) / 255 for i in (0, 2, 4))
+            kanalen = [k / 12.92 if k <= 0.03928 else ((k + 0.055) / 1.055) ** 2.4 for k in (rood, groen, blauw)]
+            return 0.2126 * kanalen[0] + 0.7152 * kanalen[1] + 0.0722 * kanalen[2]
+
+        licht_a, licht_b = _helderheid(kleuren[0]), _helderheid(kleuren[1])
+        verhouding = (max(licht_a, licht_b) + 0.05) / (min(licht_a, licht_b) + 0.05)
+        oordeel = "voldoet aan AA" if verhouding >= 4.5 else "te weinig contrast voor tekst"
+        return {
+            "naam": "devhulp",
+            "bron": "de engine zelf (WCAG-formule)",
+            "tekst": f"Contrast tussen #{kleuren[0]} en #{kleuren[1]}: {_getal(verhouding)}:1 — {oordeel}.",
+        }
+    if "qr" in laag:
+        na_voor = re.split(r"\bvoor\b", verzoek, maxsplit=1, flags=re.I)
+        doel = (na_voor[1].strip(" :?") if len(na_voor) > 1 else "") or "https://example.com"
+        return {
+            "naam": "devhulp",
+            "bron": "api.qrserver.com",
+            "tekst": (
+                f"QR-code voor '{doel}': https://api.qrserver.com/v1/create-qr-code/?size=300x300&data="
+                + urllib.parse.quote(doel)
+            ),
+        }
+    return {
+        "naam": "devhulp",
+        "bron": "de engine zelf",
+        "tekst": "",
+        "fout": "ik ken alleen sha256, sha1, md5, base64, json, contrast en qr",
+    }
+
 # Welke route bij welk gereedschap hoort: (/api/<naam>?q=...)
 GEREEDSCHAP_ROUTES = {
     "rekenen": (gereedschap_rekenen, "q"),
@@ -3429,6 +3880,15 @@ GEREEDSCHAP_ROUTES = {
     "boek": (gereedschap_boek, "q"),
     "vliegtuigen": (gereedschap_vliegtuigen, "q"),
     "document": (gereedschap_document, "q"),
+    "aardbevingen": (gereedschap_aardbevingen, "q"),
+    "hooikoorts": (gereedschap_hooikoorts, "plaats"),
+    "bruggen": (gereedschap_bruggen, "plaats"),
+    "verwachting": (gereedschap_verwachting, "plaats"),
+    "gasprijs": (gereedschap_gasprijs, None),
+    "horeca": (gereedschap_horeca, "q"),
+    "weeralarm": (gereedschap_weeralarm, "q"),
+    "buurtcijfers": (gereedschap_buurtcijfers, "gemeente"),
+    "devhulp": (gereedschap_devhulp, "q"),
 }
 
 
@@ -3467,6 +3927,15 @@ GEREEDSCHAP_SOORTEN = {
     "boek": "schrijver en jaar van een boek (openlibrary.org)",
     "vliegtuigen": "hoeveel vliegtuigen er nu boven Nederland hangen (OpenSky)",
     "document": "een document uit je eigen map lezen (WLLM_DOCUMENTEN)",
+    "aardbevingen": "aardbevingen in Nederland en omstreken (EMSC)",
+    "hooikoorts": "pollen en UV-index (open-meteo.com)",
+    "bruggen": "geplande brugopeningen (NDW/Rijkswaterstaat)",
+    "verwachting": "de verwachting voor veertien dagen (open-meteo.com)",
+    "gasprijs": "de gasprijs per kuub (energyzero.nl)",
+    "horeca": "horeca en winkels in de buurt (openstreetmap.org)",
+    "weeralarm": "officiële weerswaarschuwingen (meteoalarm.org)",
+    "buurtcijfers": "leeftijdsopbouw en dichtheid van een gemeente (CBS)",
+    "devhulp": "hashes, base64, json, kleurcontrast en QR (de engine zelf)",
 }
 
 
@@ -3500,6 +3969,7 @@ def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
     laag = tekst.lower()
 
     for gebod, soort in (
+        ("/weeralarm", "weeralarm"),
         ("/weer", "weer"),
         ("/nieuws", "nieuws"),
         ("/wiki", "naslag"),
@@ -3545,6 +4015,16 @@ def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
         ("/boek", "boek"),
         ("/vliegtuigen", "vliegtuigen"),
         ("/document", "document"),
+        ("/aardbevingen", "aardbevingen"),
+        ("/bevingen", "aardbevingen"),
+        ("/hooikoorts", "hooikoorts"),
+        ("/pollen", "hooikoorts"),
+        ("/bruggen", "bruggen"),
+        ("/verwachting", "verwachting"),
+        ("/gasprijs", "gasprijs"),
+        ("/horeca", "horeca"),
+        ("/buurtcijfers", "buurtcijfers"),
+        ("/devhulp", "devhulp"),
     ):
         if laag.startswith(gebod):
             argument = tekst[len(gebod) :].strip(" :?")
@@ -3622,6 +4102,24 @@ def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
         return [("vliegtuigen", "")]
     if re.search(r"\b(mijn documenten|document|pdf|word-bestand|lees eens)\b", laag):
         return [("document", tekst)]
+    if re.search(r"\b(aardbeving\w*|beving\w*|trilling\w*|seismisch)\b", laag):
+        return [("aardbevingen", tekst)]
+    if re.search(r"\b(hooikoorts\w*|pollen|uv-index|zonkracht|verbranden)\b", laag):
+        return [("hooikoorts", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\b(brug\w*|bascule|ophaalbrug)\b", laag):
+        return [("bruggen", _plaats_uit(tekst) or "")]
+    if re.search(r"\b(14 dagen|veertien dagen|veertiendaagse|twee weken vooruit|langetermijnverwachting)\b", laag):
+        return [("verwachting", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\b(gasprijs|gas\b|gasrekening|kubieke meter gas)\b", laag):
+        return [("gasprijs", "")]
+    if re.search(r"\b(pizzeria|restaurant|eetcaf|kroeg|snackbar|frituur|bakker|slager|supermarkt|apotheek|huisarts|in de buurt|dichtstbijzijnde)\b", laag):
+        return [("horeca", tekst)]
+    if re.search(r"\b(weeralarm|code geel|code oranje|code rood|weerswaarschuwing)\b", laag):
+        return [("weeralarm", "")]
+    if re.search(r"\b(leeftijdsopbouw|bevolkingsdichtheid|hoeveel 65-plussers|hoeveel kinderen wonen)\b", laag):
+        return [("buurtcijfers", tekst)]
+    if re.search(r"\b(sha256|sha1|md5|base64|json formatteren|kleurcontrast|qr-code|qrcode)\b", laag):
+        return [("devhulp", tekst)]
 
     keuzes: list[tuple[str, str]] = []
     if re.search(r"\b(weer|weersverwachting|weersvoorspelling|temperatuur|graden|regen|sneeuw|zonnig|bewolkt|waait|fris|koud|warm)\b", laag):
@@ -3717,6 +4215,24 @@ def gereedschap_uitvoeren(keuzes: list[tuple[str, str]]) -> list[dict]:
                 uitkomsten.append(gereedschap_vliegtuigen(argument))
             elif soort == "document":
                 uitkomsten.append(gereedschap_document(argument))
+            elif soort == "aardbevingen":
+                uitkomsten.append(gereedschap_aardbevingen(argument))
+            elif soort == "hooikoorts":
+                uitkomsten.append(gereedschap_hooikoorts(argument))
+            elif soort == "bruggen":
+                uitkomsten.append(gereedschap_bruggen(argument))
+            elif soort == "verwachting":
+                uitkomsten.append(gereedschap_verwachting(argument))
+            elif soort == "gasprijs":
+                uitkomsten.append(gereedschap_gasprijs())
+            elif soort == "horeca":
+                uitkomsten.append(gereedschap_horeca(argument))
+            elif soort == "weeralarm":
+                uitkomsten.append(gereedschap_weeralarm(argument))
+            elif soort == "buurtcijfers":
+                uitkomsten.append(gereedschap_buurtcijfers(argument))
+            elif soort == "devhulp":
+                uitkomsten.append(gereedschap_devhulp(argument))
         except Exception as fout:  # nooit de vraag laten stuklopen op gereedschap
             uitkomsten.append(
                 {"naam": soort, "bron": "", "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
