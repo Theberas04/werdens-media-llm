@@ -101,27 +101,71 @@ is of hoe laat het is. De engine haalt dat zelf op en zet het boven de vraag, du
 het model hoeft niets te beslissen — dat is precies waarom het ook met een klein
 model werkt.
 
+Er zijn vijfentwintig gereedschappen, in drie groepen.
+
+**Zonder internet** — de engine rekent zelf, dus altijd goed en direct:
+
+| Gereedschap | Voorbeeldvraag |
+|---|---|
+| rekenen | *hoeveel is 17% van 2480?* |
+| eenheden | *10 km in mijl*, *hoeveel pond is 2 kilo?* |
+| datum | *hoeveel dagen tot 5 december?* |
+| feestdagen | *welke feestdagen zijn er in 2027?* |
+| tijdzone | *hoe laat is het in New York?* |
+
+**Bronnen zonder sleutel:**
+
 | Gereedschap | Bron | Voorbeeldvraag |
 |---|---|---|
-| weer | [Open-Meteo](https://open-meteo.com) | *wat is het weer vandaag in Hilversum?* |
-| nieuws | NOS Nieuws (RSS) | *wat is er in het nieuws?* |
+| weer | [Open-Meteo](https://open-meteo.com) | *wat is het weer in Utrecht?* |
+| buien | [Buienradar](https://www.buienradar.nl) | *gaat het zo regenen in Hilversum?* |
+| lucht | Open-Meteo (CAMS) | *hoe is de luchtkwaliteit?* |
+| zon | Open-Meteo | *hoe laat gaat de zon onder?* |
+| nieuws | NOS, Tweakers, NU.nl, RTL | *wat is er in het nieuws?* |
 | naslag | Nederlandse Wikipedia | *wie is Mark Rutte?* |
+| woordenboek | [WikiWoordenboek](https://nl.wiktionary.org) | *wat betekent fiets?* |
 | zoeken | DuckDuckGo | *zoek de openingstijden van de Gamma* |
+| postcode | [PDOK](https://www.pdok.nl) (BAG) | *welke plaats hoort bij 1217 AB?* |
+| valuta | Europese Centrale Bank | *wat is 250 dollar in euro?* |
+| crypto | [CoinGecko](https://www.coingecko.com) | *wat is de koers van bitcoin?* |
+| vertalen | MyMemory | *vertaal goedemorgen* |
+| domein | [RDAP](https://rdap.org) | *van wie is nu.nl?* |
+| verkeer | [NDW](https://opendata.ndw.nu) / Rijkswaterstaat | *zijn er files op de A2?* |
 | tijd | deze machine | *hoe laat is het?* |
 
-Je kunt een gereedschap ook direct afdwingen met `/weer Utrecht`, `/nieuws`,
-`/wiki Hilversum`, `/zoek …` of `/tijd`. Alles is sleutelvrij en dus gratis;
-uitzetten kan met `WLLM_GEREEDSCHAP=0`.
+**Je eigen apps:**
+
+| Gereedschap | Wat het leest | Voorbeeldvraag |
+|---|---|---|
+| recepten | VoorraadThuis (ruim 10.000 recepten) | *wat kan ik maken met prei?* |
+| akkoorden | AkkoordKast | *hoe speel ik Sinterklaas kapoentje?* |
+| zittesj | de woordenlijst van de Zittesj-app | *wat betekent neit?* |
+| notities | je eigen notitiemap | *wat heb ik over de LLM opgeschreven?* |
+| status | deze machine | *hoe staat de server ervoor?* |
+
+De notities lezen alleen wat je zelf aanwijst: zet `WLLM_NOTITIES` op het pad van
+je map (meerdere mappen mogen, gescheiden door een dubbele punt). Zonder die
+instelling zegt het gereedschap eerlijk dat het niets kan lezen in plaats van te
+gokken.
+
+Je kunt een gereedschap ook direct afdwingen met een slash-commando: `/weer
+Utrecht`, `/reken 250 * 1,21`, `/verkeer A2`, `/recepten prei`, `/zittesj neit`,
+`/status` en zo verder. Alles is sleutelvrij en dus gratis; uitzetten kan met
+`WLLM_GEREEDSCHAP=0`.
 
 Er zijn ook losse routes, handig voor een eigen script of een dashboard:
 
 ```bash
 curl 'http://127.0.0.1:11434/api/weer?plaats=Hilversum'
-curl 'http://127.0.0.1:11434/api/nieuws'
-curl 'http://127.0.0.1:11434/api/wiki?q=Hilversum'
-curl 'http://127.0.0.1:11434/api/zoek?q=wat%20is%20een%20vectordatabase'
+curl 'http://127.0.0.1:11434/api/buien?plaats=Hilversum'
+curl 'http://127.0.0.1:11434/api/verkeer?weg=A2'
+curl 'http://127.0.0.1:11434/api/recepten?q=prei'
+curl 'http://127.0.0.1:11434/api/status'
 curl 'http://127.0.0.1:11434/api/gereedschap'      # wat er beschikbaar is
 ```
+
+Bij weer, neerslag en verkeer hoort bronvermelding — Buienradar en NDW vragen
+daar uitdrukkelijk om, en de engine zet de bron altijd in het antwoord.
 
 ## Snel starten (op een Debian-machine)
 
