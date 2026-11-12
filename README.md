@@ -101,7 +101,7 @@ is of hoe laat het is. De engine haalt dat zelf op en zet het boven de vraag, du
 het model hoeft niets te beslissen — dat is precies waarom het ook met een klein
 model werkt.
 
-Er zijn eenenzestig gereedschappen, in zeven groepen.
+Er zijn honderdvierenveertig gereedschappen, in twaalf groepen.
 
 **Zonder internet** — de engine rekent zelf, dus altijd goed en direct:
 
@@ -187,6 +187,72 @@ Er zijn eenenzestig gereedschappen, in zeven groepen.
 | persberichten | Rijksoverheid | *wat heeft de overheid besloten?* |
 | reistijd | OSRM + NDW | *hoe lang doe ik over Utrecht naar Maastricht?* |
 | spelling | OpenTaal-woordenlijst | *controleer mijn spelling* |
+
+**Weer en water, in detail:**
+
+| Gereedschap | Bron | Voorbeeldvraag |
+|---|---|---|
+| regenradar | Buienradar | *waar regent het nu?* |
+| neerslag | Buienradar (5 minuten) | *blijft het droog de komende twee uur?* |
+| windstoten | Open-Meteo | *hoe hard waait het?* |
+| uv | Open-Meteo | *hoe hoog is de zonkracht vandaag?* |
+| verbrandingstijd | eigen berekening | *hoe lang kan ik in de zon blijven?* |
+| klimaat | Open-Meteo archief | *hoe warm was het per maand?* |
+| warmste dag | Open-Meteo archief | *wat was de warmste dag dit jaar?* |
+| getijden | Rijkswaterstaat | *hoe laat is het hoogwater in Vlissingen?* |
+| watertemperatuur | Rijkswaterstaat | *hoe warm is het zeewater?* |
+| maanfase | eigen berekening | *hoe vol staat de maan?* |
+| zwemwater | zwemwater.nl | *kan ik daar zwemmen?* (geen open API) |
+
+**Reizen en vervoer:**
+
+| Gereedschap | Bron | Voorbeeldvraag |
+|---|---|---|
+| werkzaamheden | NDW | *waar wordt aan de weg gewerkt?* |
+| snelheidslimiet | OpenStreetMap | *hoe hard mag ik hier?* |
+| flitspalen | OpenStreetMap | *waar staan flitspalen?* |
+| ov | OVapi | *welke lijnen rijden er in Utrecht?* |
+| spoorwerk | nieuwsfeed | *is er werk aan het spoor?* |
+| fietsroute, wandelroute | OSM routing | *hoe lang fiets ik naar Amersfoort?* |
+| tolwegen, veerponten | OpenStreetMap | *moet ik tol betalen?* |
+| tankstations, p+r | OpenStreetMap | *waar kan ik tanken?* |
+| vertrektijden, treinvertragingen | — | werken niet meer zonder sleutel |
+
+**Geld, overheid en kennis:**
+
+| Gereedschap | Bron | Voorbeeldvraag |
+|---|---|---|
+| valuta-geschiedenis, crypto-geschiedenis | Frankfurter, CoinGecko | *hoe deed de dollar het dit jaar?* |
+| aandelenkoers | Yahoo Finance | *wat doet ASML?* |
+| hypotheekrente, spaarrente | vergelijkingssites | *wat is de hypotheekrente?* |
+| teruglevering, zonnepanelen | EnergyZero, Open-Meteo | *wat leveren mijn panelen op?* |
+| kosten apparaat, reiskosten, rente op rente | eigen berekening | *wat kost een vriezer per jaar?* |
+| bruto netto, belasting | eigen berekening (tarieven 2025) | *wat houd ik netto over?* |
+| kamerstukken, bekendmakingen, subsidies, provincie, wetten | nieuwsfeeds | *wat speelt er in de Kamer?* |
+| gemeente open data | CBS | *geef de cijfers van mijn gemeente* |
+| wikipedia volledig, woord van de dag, definitie | Wikipedia, WikiWoordenboek | *geef het volledige artikel* |
+| rijmwoorden | OpenTaal-woordenlijst | *wat rijmt op huis?* |
+| werkwoorden, getallen in woorden | eigen berekening | *vervoeg lopen* |
+| citaten | Wikiquote | *een citaat over moed* |
+| films, muziekalbums, landeninfo, nobelprijzen | Wikidata, MusicBrainz, RestCountries, nobelprize.org | *wie speelt erin?* |
+| vandaag in het jaar | Wikipedia | *wat gebeurde er op deze dag?* |
+
+**Nieuws, gezondheid en de buurt:**
+
+| Gereedschap | Bron | Voorbeeldvraag |
+|---|---|---|
+| nieuws onderwerp, nieuws gemeente, evenementen, nieuwsarchief | Google Nieuws-feed | *nieuws over ASML* |
+| sportuitslagen | NOS | *wat zijn de uitslagen?* |
+| podcasts | iTunes | *zoek een podcast over geschiedenis* |
+| radiostations | NPO icecast | *welke zenders zijn er?* |
+| calorieen, voedingswaarde, allergenen, barcode | Open Food Facts | *hoeveel calorieën zit erin?* |
+| verbranding | eigen berekening | *hoeveel kcal verbrand ik met fietsen?* |
+| ehbo | eigen naslag | *ehbo bij een brandwond* |
+| griepcijfers, corona-cijfers, bijwerkingen, wachttijden | RIVM, CBG | eerlijke melding als er geen open API is |
+| supermarkten, bereikbaarheid | OpenStreetMap | *waar is de supermarkt?* |
+| huizenprijzen | CBS | *wat kost een huis in Sittard?* |
+| hoogte | Open-Meteo | *hoe hoog ligt Utrecht?* |
+| afval ophalen, zon op je dak | — | eerlijke melding: per gemeente geregeld |
 
 **Je eigen apps:**
 
