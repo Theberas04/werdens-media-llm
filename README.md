@@ -101,7 +101,7 @@ is of hoe laat het is. De engine haalt dat zelf op en zet het boven de vraag, du
 het model hoeft niets te beslissen — dat is precies waarom het ook met een klein
 model werkt.
 
-Er zijn vijfentwintig gereedschappen, in drie groepen.
+Er zijn vierendertig gereedschappen, in vier groepen.
 
 **Zonder internet** — de engine rekent zelf, dus altijd goed en direct:
 
@@ -133,6 +133,18 @@ Er zijn vijfentwintig gereedschappen, in drie groepen.
 | verkeer | [NDW](https://opendata.ndw.nu) / Rijkswaterstaat | *zijn er files op de A2?* |
 | tijd | deze machine | *hoe laat is het?* |
 
+**Water, energie, afstand en meer:**
+
+| Gereedschap | Bron | Voorbeeldvraag |
+|---|---|---|
+| water | [Rijkswaterstaat](https://rijkswaterstaatdata.nl) | *hoe hoog staat het water bij Vlissingen?* |
+| stroomprijs | EnergyZero | *wat kost stroom nu?* |
+| afstand | OpenStreetMap (OSRM) | *hoe ver is het van Utrecht naar Maastricht?* |
+| wetten | [wetten.overheid.nl](https://wetten.overheid.nl) | *wat zegt de Waterwet?* |
+| cbs | [CBS Open Data](https://opendata.cbs.nl) | *hoeveel inwoners heeft Sittard?* |
+| boek | [Open Library](https://openlibrary.org) | *wie schreef De Avonden?* |
+| vliegtuigen | [OpenSky](https://opensky-network.org) | *hoeveel vliegtuigen hangen er boven Nederland?* |
+
 **Je eigen apps:**
 
 | Gereedschap | Wat het leest | Voorbeeldvraag |
@@ -142,11 +154,19 @@ Er zijn vijfentwintig gereedschappen, in drie groepen.
 | zittesj | de woordenlijst van de Zittesj-app | *wat betekent neit?* |
 | notities | je eigen notitiemap | *wat heb ik over de LLM opgeschreven?* |
 | status | deze machine | *hoe staat de server ervoor?* |
+| boodschappen | VoorraadThuis-voorraad + recepten | *wat moet ik kopen voor preisoep?* |
+| document | je eigen documentenmap | *wat staat er in mijn notitie over de LLM?* |
 
-De notities lezen alleen wat je zelf aanwijst: zet `WLLM_NOTITIES` op het pad van
-je map (meerdere mappen mogen, gescheiden door een dubbele punt). Zonder die
-instelling zegt het gereedschap eerlijk dat het niets kan lezen in plaats van te
-gokken.
+De notities en de documenten lezen alleen wat je zelf aanwijst: zet
+`WLLM_NOTITIES` en `WLLM_DOCUMENTEN` op het pad van je mappen (meerdere mappen
+mogen, gescheiden door een dubbele punt). Zonder die instelling zegt het
+gereedschap eerlijk dat het niets kan lezen in plaats van te gokken. Voor de
+boodschappenlijst wijst `WLLM_VOORRAAD_DB` naar de database van VoorraadThuis.
+
+Documenten worden gelezen als txt, md, docx en pdf. Let op: een pdf die zijn
+tekst met een eigen lettercode opslaat — zoals alles wat Chromium maakt — kan de
+engine niet ontcijferen; dan zegt hij dat eerlijk en kun je er een txt- of
+docx-versie naast zetten.
 
 Je kunt een gereedschap ook direct afdwingen met een slash-commando: `/weer
 Utrecht`, `/reken 250 * 1,21`, `/verkeer A2`, `/recepten prei`, `/zittesj neit`,
@@ -161,6 +181,10 @@ curl 'http://127.0.0.1:11434/api/buien?plaats=Hilversum'
 curl 'http://127.0.0.1:11434/api/verkeer?weg=A2'
 curl 'http://127.0.0.1:11434/api/recepten?q=prei'
 curl 'http://127.0.0.1:11434/api/status'
+curl 'http://127.0.0.1:11434/api/water?plaats=Vlissingen'
+curl 'http://127.0.0.1:11434/api/stroomprijs'
+curl 'http://127.0.0.1:11434/api/afstand?q=van%20Utrecht%20naar%20Maastricht'
+curl 'http://127.0.0.1:11434/api/cbs?gemeente=Sittard'
 curl 'http://127.0.0.1:11434/api/gereedschap'      # wat er beschikbaar is
 ```
 
