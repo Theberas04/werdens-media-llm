@@ -151,7 +151,7 @@ def _kies_whisper() -> Path:
     vast = os.environ.get("WMLM_WHISPER_BIN")
     if vast:
         return Path(vast)
-    for naam in ("whisper-cli", "main"):
+    for naam in ("whisper-cli", "whisper-cli.exe", "main", "main.exe"):
         kandidaten = [
             BIN / naam,
             *sorted(BIN.glob(f"whisper*/{naam}")),
@@ -167,17 +167,24 @@ def _kies_whisper() -> Path:
         for pad in sorted(BIN.rglob(naam)):
             if _uitvoerbaar(pad):
                 return pad
-    return BIN / "whisper-cli"
+    return BIN / ("whisper-cli.exe" if os.name == "nt" else "whisper-cli")
 
 
 def _kies_piper() -> Path:
     vast = os.environ.get("WMLM_PIPER_BIN")
     if vast:
         return Path(vast)
-    for pad in [BIN / "piper" / "piper", BIN / "piper", *sorted(BIN.glob("piper*/piper"))]:
-        if _uitvoerbaar(pad):
-            return pad
-    return BIN / "piper" / "piper"
+    naamlijst = ("piper.exe", "piper") if os.name == "nt" else ("piper", "piper.exe")
+    for naam in naamlijst:
+        for pad in [
+            BIN / "piper" / naam,
+            BIN / naam,
+            *sorted(BIN.glob(f"piper*/{naam}")),
+            *sorted(BIN.glob(f"piper*/*/{naam}")),
+        ]:
+            if _uitvoerbaar(pad):
+                return pad
+    return BIN / "piper" / naamlijst[0]
 
 
 WHISPER_BIN = _kies_whisper()

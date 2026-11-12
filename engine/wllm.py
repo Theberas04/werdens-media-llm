@@ -516,7 +516,14 @@ def kies_engine() -> Path:
     if vast:
         return Path(vast)
     basis = HOME / "engine"
-    kandidaten = sorted(basis.glob("llama-*/llama-server")) if basis.exists() else []
+    # Windows levert llama-server.exe, Linux llama-server: beide namen zoeken,
+    # zodat dezelfde code op beide systemen werkt.
+    kandidaten = []
+    if basis.exists():
+        for naam in ("llama-server", "llama-server.exe"):
+            kandidaten += sorted(basis.glob(f"llama-*/{naam}"))
+            if (basis / naam).exists():
+                kandidaten.append(basis / naam)
     if not kandidaten:
         return basis / "llama-b12262" / "llama-server"
     if GPU.get("aanwezig"):
@@ -2188,6 +2195,10 @@ def _ruim_achterblijvers_op() -> int:
     loopt het geheugen vol. Alleen processen die van deze engine afkomstig zijn en
     waarvan de ouder geen draaiende engine meer is, worden opgeruimd -- twee
     engines naast elkaar blijven dus met rust gelaten."""
+    if not os.path.isdir("/proc"):
+        # Windows heeft geen /proc; daar ruimt stop-werdens-media-llm.ps1 de
+        # achtergebleven rekenkernen op.
+        return 0
     levende_engines = set()
     for naam in os.listdir("/proc"):
         if not naam.isdigit():

@@ -106,6 +106,25 @@ tar xzf llama-b12262-bin-ubuntu-x64.tar.gz
 cd .. && python3 engine/wllm.py serve      # luistert op :11434
 ```
 
+## Installeren op Windows
+
+Download de map van deze repo (groene **Code**-knop → *Download ZIP*), pak hem uit
+en dubbelklik op **`deploy\windows\start-werdens-media-llm.bat`**.
+
+De eerste keer wordt alles wat nodig is opgehaald (llama.cpp voor Windows plus de
+modellen, circa 2,5 GB); daarna starten de drie lagen meteen en opent de
+chatpagina. Nodig is alleen **Python 3** van [python.org](https://www.python.org/downloads/windows/)
+(met het vinkje *Add python.exe to PATH*); verder niets te installeren.
+
+```powershell
+# liever zelf de variant kiezen (cpu, vulkan, cuda12, cuda13)
+python deploy\windows\setup.py --variant vulkan
+```
+
+Stoppen: `deploy\windows\stop-werdens-media-llm.bat`. Zie
+[`deploy/windows/README.md`](deploy/windows/README.md) voor de details, de
+poorten en spraak.
+
 ## Installeren op Proxmox
 
 Eén regel, in de shell van je **Proxmox-host** (als root):
