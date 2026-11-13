@@ -18093,9 +18093,18 @@ def _afstand_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def _cat_naslag(onderwerp: str, naam: str) -> dict:
-    """Naslag over een onderwerp (Nederlandse Wikipedia)."""
+    """Naslag over een onderwerp (Nederlandse Wikipedia).
+
+    Eerst de korte samenvatting; raakt die op zijn limiet, dan de zoek-API, want
+    die twee tellen apart en de tweede is de weg die het gewone naslag-gereedschap
+    ook gebruikt.
+    """
     gegevens = _wiki_samenvatting(onderwerp)
     if not gegevens:
+        uitkomst = gereedschap_wikipedia(onderwerp)
+        if (uitkomst.get("tekst") or "").strip():
+            uitkomst["naam"] = naam
+            return uitkomst
         return {"naam": naam, "bron": "nl.wikipedia.org", "tekst": "",
                 "fout": f"ik kon '{onderwerp}' niet vinden op de Nederlandse Wikipedia"}
     titel = _schoon(str(gegevens.get("title") or onderwerp))
