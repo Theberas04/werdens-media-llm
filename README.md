@@ -101,7 +101,7 @@ is of hoe laat het is. De engine haalt dat zelf op en zet het boven de vraag, du
 het model hoeft niets te beslissen — dat is precies waarom het ook met een klein
 model werkt.
 
-Er zijn honderdvierenveertig gereedschappen, in twaalf groepen.
+Er zijn tweehonderdzevenenzeventig gereedschappen, in eenentwintig groepen.
 
 **Zonder internet** — de engine rekent zelf, dus altijd goed en direct:
 
@@ -253,6 +253,20 @@ Er zijn honderdvierenveertig gereedschappen, in twaalf groepen.
 | huizenprijzen | CBS | *wat kost een huis in Sittard?* |
 | hoogte | Open-Meteo | *hoe hoog ligt Utrecht?* |
 | afval ophalen, zon op je dak | — | eerlijke melding: per gemeente geregeld |
+
+**Er nog eens 133 bij, in negen nieuwe groepen:**
+
+| Groep | Aantal | Wat erin zit |
+|---|---|---|
+| Weer en natuur | 14 | gevoelstemperatuur, dauwpunt, zicht, sneeuw, windrichting, fijnstof, poollicht, ruimteweer, ISS, maanopkomst, rivierafvoer, bodemvocht, graaddagen, zonuren |
+| Verkeer en vervoer | 13 | kenteken opzoeken, APK, brandstofverbruik, terugroepacties, files nu, NS-verstoringen, dichtstbijzijnde halte, verkeersboetes, vliegtuig opzoeken, schip opzoeken, occasions, laadpunten, veerboottijden |
+| Geld en zaken | 16 | maandlasten hypotheek, dividend, beursindices, grondstofprijzen, gasprijs TTF, crypto omrekenen, box 3, vakantiegeld, lease-bijtelling, goedkoopste pomp, huurwoningen, inflatie per productgroep, koopkracht, toeslagen, AOW-leeftijd, gemeentelijke lasten |
+| Overheid en recht | 14 | raadsbesluiten, moties en amendementen, vergaderagenda, stemmingen, Staatscourant, open data register, EUR-Lex, reisadviezen, ambassades, oorlogsbronnen, archief, paspoort en ID, uittreksel BRP, aankomende verkiezingen |
+| Kennis en taal | 20 | etymologie, de of het, meervoud, anagrammen, lettergrepen, spreekwoorden, citaten van een persoon, liedteksten, artiesteninfo, series, musea, monumenten, bergtoppen, vlaggen, wiskunde, statistiek, Romeinse cijfers, weeknummers, bieb zoeken, tijdlijn |
+| Nieuws, sport en media | 12 | Formule 1, voetbalstanden, Eredivisie-programma, wielrennen, olympische medailles, podcast-afleveringen, YouTube zoeken, krantenvoorpagina's, mediawijsheid, streaming, concerten, evenementenkalender |
+| Gezondheid en voeding | 11 | BMI en gezond gewicht, hartslagzones, stappen naar kilometers, E-nummers, AED in de buurt, apotheken, huisartsenpost, tekenbeet en lyme, reisvaccinaties, bloeddonatie, psychische hulp |
+| Buurt en wonen | 13 | openingstijden winkel, scholen, kinderopvang, speeltuinen, honden uitlaatplekken, geldautomaat, brievenbus, glasbak, bibliotheek en zwembad, bestemmingsplan, leefbaarheid, energielabel, bouwprojecten |
+| Techniek en internet | 20 | IP opzoeken, DNS, SSL-certificaat, GitHub, npm, PyPI, Docker, CVE zoeken, wachtwoordlek, wayback machine, QR-code, link inkorten, Linux-commando, cron, schermafdruk, UUID en wachtwoord, JSON formatteren, unixtijd, bestandsgrootte, serverstatus |
 
 **Je eigen apps:**
 

@@ -7068,6 +7068,6270 @@ def gereedschap_bereikbaarheid(plaats: str) -> dict:
                   f"Dat is {oordeel} openbaar vervoer."),
     }
 
+# ---- O. gezondheid, voeding en de buurt ------------------------------------
+
+# Bijna alle plekken in deze groep komen uit OpenStreetMap. Deze twee hulpjes
+# doen het opzoeken, sorteren en netjes opschrijven, zodat elk gereedschap kort
+# blijft. Ze gooien een ValueError met een Nederlandse uitleg als het misgaat.
+
+
+def _buurt_lijst(plaats: str, tag: str, straal: int, soort: str, aantal: int = 4,
+                 extra=None) -> tuple[list[str], str]:
+    """De dichtstbijzijnde plekken met dit OSM-kenmerk, als leesbare regels.
+
+    Geeft (regels, nette plaatsnaam) terug; de regels zijn 'naam (0,4 km)' en
+    krijgen eventueel nog een detailstuk van de functie 'extra' erachter.
+    """
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        raise ValueError("geen plaats opgegeven")
+    plekken, nette = _osm_nabij(plaats, tag, straal, 8)
+    regels = []
+    for afstand, naam, kenmerken in plekken[:aantal]:
+        stuk = f"{naam or soort} ({_getal(afstand, ' km')})"
+        detail = (extra(kenmerken) or "").strip() if extra else ""
+        if detail:
+            stuk += f" — {detail}"
+        regels.append(stuk)
+    return regels, nette
+
+
+OSM_DAGEN = {"Mo": "ma", "Tu": "di", "We": "wo", "Th": "do", "Fr": "vr",
+             "Sa": "za", "Su": "zo", "PH": "feestdagen"}
+
+
+def _osm_open(waarde: object, lengte: int = 70) -> str:
+    """Openingstijden uit OpenStreetMap in gewoon Nederlands."""
+    tekst = str(waarde or "").strip()
+    if not tekst:
+        return ""
+    tekst = re.sub(r"\b(Mo|Tu|We|Th|Fr|Sa|Su|PH)\b",
+                   lambda stuk: OSM_DAGEN[stuk.group(1)], tekst)
+    tekst = tekst.replace("24/7", "24 uur per dag")
+    tekst = re.sub(r"\boff\b", "gesloten", tekst)
+    return _kort(tekst, lengte)
+
+
+def _met_tijden(kenmerken: dict) -> str:
+    """Alleen de openingstijden als extraatje bij een plek."""
+    return _osm_open(kenmerken.get("opening_hours") or "")
+
+
+# ---- Gezondheid en voeding --------------------------------------------------
+
+
+def gereedschap_bmi(argument: str = "") -> dict:
+    """Je BMI uit gewicht en lengte, met verwijzing naar de huisarts."""
+    laag = (argument or "").lower().replace(",", ".")
+    kilo = re.search(r"(\d{2,3}(?:\.\d)?)\s*(?:kg|kilo|kilogram)", laag)
+    meter = re.search(r"(\d\.\d{1,2})\s*(?:m\b|meter)", laag)
+    centimeter = re.search(r"(\d{2,3})\s*(?:cm|centimeter)", laag)
+    los = re.search(r"\b(\d)\s*(?:m|meter)\s*(\d{2})\b", laag)
+    gewicht = float(kilo.group(1)) if kilo else 0.0
+    lengte = 0.0
+    if meter:
+        lengte = float(meter.group(1))
+    elif centimeter:
+        lengte = float(centimeter.group(1)) / 100
+    elif los:
+        lengte = float(los.group(1)) + float(los.group(2)) / 100
+    if not gewicht or not 1.0 <= lengte <= 2.5:
+        return {"naam": "bmi", "bron": "eigen berekening", "tekst": "", "fout":
+                "noem je gewicht en lengte, bijvoorbeeld '80 kilo en 1,80 meter'"}
+    bmi = gewicht / (lengte * lengte)
+    nette_lengte = f"{lengte:.2f}".rstrip("0").rstrip(".").replace(".", ",")
+    if bmi < 18.5:
+        oordeel = "onder het bereik dat gewoonlijk als gezond geldt (ondergewicht)"
+    elif bmi < 25:
+        oordeel = "binnen het bereik dat gewoonlijk als gezond geldt"
+    elif bmi < 30:
+        oordeel = "boven dat bereik (overgewicht)"
+    else:
+        oordeel = "duidelijk boven dat bereik (obesitas)"
+    onder = 18.5 * lengte * lengte
+    boven = 24.9 * lengte * lengte
+    return {
+        "naam": "bmi",
+        "bron": "eigen berekening (gewone BMI-formule)",
+        "tekst": (f"Met {_getal(gewicht, ' kilo')} bij {nette_lengte} meter is je BMI "
+                  f"{_getal(bmi)} — {oordeel}. Een gewicht tussen {_getal(onder, ' kilo')} en "
+                  f"{_getal(boven, ' kilo')} hoort bij deze lengte binnen dat gewone bereik. "
+                  "Let op: BMI is een ruwe maat die geen rekening houdt met spier- en vetverdeling, "
+                  "en hij geldt niet voor kinderen, zwangere vrouwen en mensen met veel spiermassa. "
+                  "Dit is geen diagnose en geen medisch advies: twijfel je over je gewicht, vraag "
+                  "het dan aan je huisarts."),
+    }
+
+
+def gereedschap_hartslagzones(argument: str = "") -> dict:
+    """Geschatte hartslagzones op basis van leeftijd; nadrukkelijk geen advies."""
+    laag = (argument or "").lower()
+    leeftijd = (re.search(r"(\d{1,2})\s*(?:jaar|jr)\b", laag)
+                or re.search(r"\b(?:ben|ik ben|leeftijd van)\s+(\d{1,2})\b", laag))
+    if not leeftijd:
+        return {"naam": "hartslagzones", "bron": "eigen berekening", "tekst": "", "fout":
+                "noem je leeftijd, bijvoorbeeld 'hartslagzones voor 45 jaar'"}
+    jaren = int(leeftijd.group(1))
+    if not 10 <= jaren <= 100:
+        return {"naam": "hartslagzones", "bron": "eigen berekening", "tekst": "", "fout":
+                f"{jaren} jaar lijkt me geen kloppende leeftijd; noem een leeftijd tussen 10 en 100"}
+    maximum = 208 - 0.7 * jaren
+    zones = (("herstel", 0.50, 0.60), ("rustige duurtraining", 0.60, 0.70),
+             ("tempo", 0.70, 0.80), ("drempel", 0.80, 0.90), ("maximaal", 0.90, 1.00))
+    regels = [f"{naam} {_getal(van * maximum, komma=False)}-{_getal(tot * maximum, komma=False)}"
+              for naam, van, tot in zones]
+    return {
+        "naam": "hartslagzones",
+        "bron": "eigen berekening (formule 208 - 0,7 x leeftijd)",
+        "tekst": (f"Voor iemand van {jaren} jaar ligt de geschatte maximale hartslag op ongeveer "
+                  f"{_getal(maximum, komma=False)} slagen per minuut. De zones daarbij zijn: "
+                  + "; ".join(regels) + " slagen per minuut. Dit is een ruwe schatting: je echte "
+                  "maximum kan er tientallen slagen naast zitten en verschilt per persoon. Slik je "
+                  "medicijnen (zoals bètablokkers) of heb je een hart- of vaatziekte, overleg dan met "
+                  "je (sport)arts voordat je op een hoge hartslag traint. Dit is geen medisch advies."),
+    }
+
+
+DUIZEND = {"duizend": 1000, "tweeduizend": 2000, "drieduizend": 3000, "vierduizend": 4000,
+           "vijfduizend": 5000, "zesduizend": 6000, "zevenduizend": 7000, "achtduizend": 8000,
+           "negenduizend": 9000, "tienduizend": 10000}
+
+
+def gereedschap_stappen(argument: str = "") -> dict:
+    """Stappen omrekenen naar kilometers of andersom."""
+    laag = (argument or "").lower().replace(".", "").replace(",", ".")
+    stappen = re.search(r"(\d{1,6})\s*(?:duizend\s+)?(?:stap(?:pen)?|pas(?:sen)?)\b", laag)
+    woorden = re.search(r"\b(" + "|".join(DUIZEND) + r")\s*(?:stappen|stap|passen)\b", laag)
+    afstand = re.search(r"(\d+(?:\.\d+)?)\s*(?:km|kilometer)", laag)
+    stap = re.search(r"(\d{2})\s*cm\s*(?:per\s+)?(?:stap|pas)?", laag)
+    lengte = float(stap.group(1)) / 100 if stap else 0.70
+    if not 0.3 <= lengte <= 1.2:
+        lengte = 0.70
+    nette_stap = f"{lengte:.2f}".rstrip("0").rstrip(".").replace(".", ",")
+    aantal = 0
+    if stappen:
+        if "duizend" in stappen.group(0):
+            aantal = int(re.search(r"\d{1,3}", stappen.group(0)).group(0)) * 1000
+        else:
+            aantal = int(re.search(r"\d{1,6}", stappen.group(0)).group(0))
+    elif woorden:
+        aantal = DUIZEND[woorden.group(1)]
+    if aantal:
+        kilometers = aantal * lengte / 1000
+        return {
+            "naam": "stappen",
+            "bron": "eigen berekening",
+            "tekst": (f"{aantal} stappen is ongeveer {_getal(kilometers, ' kilometer')}, gerekend "
+                      f"met een stap van {nette_stap} meter. Andersom is een kilometer "
+                      f"ongeveer {_getal(1000 / lengte, komma=False)} stappen. Dat hangt sterk af "
+                      "van je lengte en je tempo; 10.000 stappen is bij een gemiddelde stap ongeveer "
+                      "7 kilometer."),
+        }
+    if afstand:
+        kilometers = float(afstand.group(1))
+        aantal = int(round(kilometers * 1000 / lengte))
+        return {
+            "naam": "stappen",
+            "bron": "eigen berekening",
+            "tekst": (f"{_getal(kilometers, ' kilometer')} lopen is ongeveer {aantal} stappen, "
+                      f"gerekend met een stap van {nette_stap} meter. Meet je je eigen "
+                      "stappenteller, dan zie je het verschil vanzelf: de een zet grotere passen "
+                      "dan de ander."),
+        }
+    return {"naam": "stappen", "bron": "eigen berekening", "tekst": "", "fout":
+            "noem het aantal stappen of de afstand, bijvoorbeeld '8000 stappen' of '5 kilometer'"}
+
+
+def _enummer_pagina(code: str) -> str:
+    """De uitleg over één E-nummer van food-info.net als platte tekst."""
+    ruw = _haal(f"https://www.food-info.net/nl/e/e{code}.htm", limiet=20).decode("utf-8", "replace")
+    tekst = _schoon(ruw)
+    delen = tekst.split("E-nummers >")
+    inhoud = delen[-1].strip() if len(delen) > 1 else tekst
+    inhoud = re.sub(r"^E\d{3}-\d{3}\s*", "", inhoud)
+    inhoud = re.sub(r"^E\d{3}[a-z]?\s*:?\s*", "", inhoud)
+    inhoud = inhoud.split("Food-Info.net is an initiative")[0]
+    inhoud = inhoud.split("Your browser does not support script")[-1]
+    return inhoud.strip(" -|")
+
+
+def gereedschap_e_nummers(argument: str = "") -> dict:
+    """Wat een E-nummer betekent (uitleg van food-info.net)."""
+    laag = (argument or "").lower()
+    gevonden = (re.search(r"\be-?\s?nummers?\s*(\d{3})\s*([a-z])?\b", laag)
+                or re.search(r"\be-?\s?(\d{3})\s*([a-z])?\b", laag))
+    if not gevonden:
+        return {"naam": "e-nummers", "bron": "food-info.net", "tekst": "", "fout":
+                "noem een E-nummer, bijvoorbeeld 'wat is E621?' of 'E100'; de hele lijst staat op "
+                "https://www.food-info.net/nl/e/"}
+    nummer, letter = gevonden.group(1), (gevonden.group(2) or "")
+    if letter and letter in "abcdefgh":
+        code = nummer + letter
+    else:
+        code = nummer
+    try:
+        inhoud = _enummer_pagina(code)
+    except Exception:
+        try:
+            inhoud = _enummer_pagina(nummer)
+            code = nummer
+        except Exception as fout:
+            return {"naam": "e-nummers", "bron": "food-info.net", "tekst": "", "fout":
+                    f"geen pagina gevonden voor E{nummer}{letter} op food-info.net ({type(fout).__name__}); "
+                    f"probeer het daar zelf via https://www.food-info.net/nl/e/"}
+    if len(inhoud) < 40:
+        return {"naam": "e-nummers", "bron": "food-info.net", "tekst": "", "fout":
+                f"de pagina over E{code} bevat geen leesbare uitleg; kijk op "
+                f"https://www.food-info.net/nl/e/e{code}.htm"}
+    return {
+        "naam": "e-nummers",
+        "bron": f"food-info.net/nl/e/e{code}.htm (Stichting Food-Info)",
+        "tekst": (f"E{code.upper()}: {_kort(inhoud, 600)} Dit is algemene uitleg over de stof, geen "
+                  "oordeel over jouw situatie en geen medisch advies. Moet je een additief mijden "
+                  "(allergie, zwangerschap, medicijnen), vraag het dan aan je huisarts of diëtist."),
+    }
+
+
+def _aed_detail(kenmerken: dict) -> str:
+    """Waar een AED hangt, of je erbij kunt en wanneer."""
+    stukken = []
+    plek = kenmerken.get("defibrillator:location") or kenmerken.get("description")
+    if plek:
+        stukken.append(_kort(_schoon(str(plek)), 50))
+    binnen = str(kenmerken.get("indoor", "")).lower()
+    if binnen in ("yes", "ja"):
+        stukken.append("binnen")
+    elif binnen in ("no", "nee"):
+        stukken.append("buiten")
+    if str(kenmerken.get("access", "")).lower() in ("private", "no"):
+        stukken.append("niet vrij toegankelijk")
+    tijden = _osm_open(kenmerken.get("opening_hours") or "")
+    if tijden:
+        stukken.append(tijden)
+    return ", ".join(stukken)
+
+
+def gereedschap_aed(plaats: str = "") -> dict:
+    """Waar de dichtstbijzijnde defibrillator hangt (OpenStreetMap)."""
+    try:
+        regels, nette = _buurt_lijst(plaats, '"emergency"="defibrillator"', 2000,
+                                     "defibrillator", 5, _aed_detail)
+    except Exception as fout:
+        return {"naam": "aed", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    if not regels:
+        return {"naam": "aed", "bron": "openstreetmap.org", "tekst":
+                f"In OpenStreetMap staat geen defibrillator binnen 2 kilometer van {nette}. "
+                "Dat wil niet zeggen dat er geen is: lang niet elke AED is ingetekend. Kijk voor "
+                "het landelijke ophaalsysteem op https://www.hartslagnu.nl/ en bel bij een "
+                "noodsituatie eerst 112 en vraag waar de dichtstbijzijnde AED hangt."}
+    return {
+        "naam": "aed",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": (f"Defibrillators bij {nette}, uit OpenStreetMap en dus niet gegarandeerd compleet: "
+                  + "; ".join(regels) + ". Bij een hartstilstand eerst 112 bellen en iemand anders "
+                  "een AED laten halen; begin met reanimeren als je dat kunt."),
+    }
+
+
+def gereedschap_apotheken(plaats: str = "") -> dict:
+    """Waar de dichtstbijzijnde apotheken zijn (OpenStreetMap)."""
+    def detail(kenmerken):
+        stukken = []
+        if str(kenmerken.get("dispensing", "")).lower() in ("yes", "ja"):
+            stukken.append("verstrekt recepten")
+        tijden = _osm_open(kenmerken.get("opening_hours") or "")
+        if tijden:
+            stukken.append(tijden)
+        return ", ".join(stukken)
+
+    try:
+        regels, nette = _buurt_lijst(plaats, '"amenity"="pharmacy"', 2000, "apotheek", 5, detail)
+    except Exception as fout:
+        return {"naam": "apotheken", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    if not regels:
+        return {"naam": "apotheken", "bron": "openstreetmap.org", "tekst":
+                f"In OpenStreetMap staat geen apotheek binnen 2 kilometer van {nette}. Kijk op "
+                "https://www.apotheek.nl/ of zoek op de site van je gemeente; buiten openingstijden "
+                "kun je bij de dienstapotheek van je regio terecht (vraag het nummer via je eigen "
+                "apotheek of de huisartsenpost)."}
+    return {
+        "naam": "apotheken",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": (f"Apotheken bij {nette}, uit OpenStreetMap: " + "; ".join(regels)
+                  + ". Bel voor een recept even van tevoren. Buiten openingstijden heeft elke regio "
+                  "een dienstapotheek; welke dat is, hoor je via je eigen apotheek of de "
+                  "huisartsenpost. Uitleg over medicijnen staat op https://www.apotheek.nl/."),
+    }
+
+
+def gereedschap_huisartsenpost(plaats: str = "") -> dict:
+    """Waar de dichtstbijzijnde huisarts of huisartsenpost is (OpenStreetMap)."""
+    try:
+        regels, nette = _buurt_lijst(plaats, '"amenity"~"^(doctors|clinic)$"', 2500,
+                                     "huisartsenpraktijk", 5, _met_tijden)
+    except Exception as fout:
+        return {"naam": "huisartsenpost", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    if not regels:
+        return {"naam": "huisartsenpost", "bron": "openstreetmap.org", "tekst":
+                f"In OpenStreetMap staat geen huisartsenpraktijk of kliniek binnen 2,5 kilometer van "
+                f"{nette}. Zoek je eigen huisarts via de site van je zorgverzekeraar of de "
+                "gemeentegids. Buiten kantooruren is er in elke regio een huisartsenpost; bij "
+                "levensgevaar bel je 112."}
+    return {
+        "naam": "huisartsenpost",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": (f"Huisartsenpraktijken en klinieken bij {nette}, uit OpenStreetMap (een "
+                  "huisartsenpost voor avond, nacht en weekend staat er niet altijd apart in): "
+                  + "; ".join(regels) + ". Bel voor je langsgaat altijd eerst; buiten kantooruren "
+                  "helpt de huisartsenpost van je regio en bij levensgevaar bel je 112."),
+    }
+
+
+def gereedschap_tekenbeet(argument: str = "") -> dict:
+    """Wat je volgens het RIVM doet bij een tekenbeet; bij twijfel naar de huisarts."""
+    rivm = ""
+    try:
+        pagina = _schoon(_haal("https://www.rivm.nl/tekenbeet", limiet=20).decode("utf-8", "replace"))
+        zin = next((stuk.strip() for stuk in re.split(r"(?<=[.!?]) ", pagina)
+                    if ("pincet" in stuk or "tekenverwijderaar" in stuk
+                        or "snel te verwijderen" in stuk or "lymebacterie" in stuk)), "")
+        rivm = (_kort(zin, 220) + " ") if zin else ""
+    except Exception:
+        rivm = ""
+    stappen = ("RIVM-advies in het kort: verwijder de teek zo snel mogelijk met een puntig pincet "
+               "of een tekenverwijderaar, zo dicht mogelijk bij de huid en zonder te knijpen. Noteer "
+               "de datum en houd de beetplek daarna in de gaten. Ga naar de huisarts bij een rode "
+               "ring of vlek die groter wordt, of bij griepachtige klachten zoals koorts en "
+               "spierpijn na een tekenbeet.")
+    return {
+        "naam": "tekenbeet",
+        "bron": "rivm.nl/tekenbeet",
+        "tekst": ("Een tekenbeet is vervelend maar goed te behandelen; hoe langer de teek vastzit, "
+                  "hoe groter de kans op de ziekte van Lyme. " + rivm + stappen +
+                  " Het volledige advies staat op https://www.rivm.nl/tekenbeet. Dit is geen "
+                  "medisch advies: word je ziek of twijfel je, bel dan je huisarts."),
+    }
+
+
+def gereedschap_reisvaccinaties(argument: str = "") -> dict:
+    """Verwijzing naar het LCR en de GGD voor reisvaccinaties."""
+    land = ""
+    gevonden = re.search(r"\b(?:naar|voor|in)\s+([A-ZÀ-Ý][a-zà-ÿ' \-]{2,24})", argument or "")
+    if gevonden:
+        kandidaat = gevonden.group(1).strip(" ?.")
+        if kandidaat.lower().split()[0] not in ("een", "de", "het", "mijn", "ons", "onze", "jouw"):
+            land = kandidaat
+    waar = f" voor {land}" if land else ""
+    return {
+        "naam": "reisvaccinaties",
+        "bron": "lcr.nl en ggdreisvaccinaties.nl",
+        "tekst": (f"Welke prikken en malariapillen je nodig hebt{waar}, hangt af van je bestemming, "
+                  "de reisduur, je route en je gezondheid; dat kan ik niet voor je bepalen en het "
+                  "staat ook niet in een open API. Het officiële advies per land staat bij het "
+                  "Landelijk Coördinatiecentrum Reizigersadvisering (https://www.lcr.nl/) en bij de "
+                  "GGD (https://www.ggdreisvaccinaties.nl/), met de adressen van vaccinatiebureaus "
+                  "in Nederland. Maak liefst vier tot zes weken voor vertrek een afspraak: sommige "
+                  "vaccinaties moeten meerdere keren worden gezet."),
+    }
+
+
+def gereedschap_bloeddonatie(argument: str = "") -> dict:
+    """Waar je bloed kunt geven (Sanquin); geen open API met locaties."""
+    return {
+        "naam": "bloeddonatie",
+        "bron": "sanquin.nl",
+        "tekst": ("Bloed en plasma geven kan in Nederland bij Sanquin. Er is geen open API met alle "
+                  "donorlocaties en openingstijden, dus ik kan hier geen adres in de buurt voor je "
+                  "ophalen. Op https://www.sanquin.nl/bloed-geven vind je de locaties, de tijden en "
+                  "de uitleg of je donor kunt worden (leeftijd, gewicht en gezondheid tellen mee); "
+                  "daar kun je je ook als nieuwe donor aanmelden. Twijfel je of je mag doneren, dan "
+                  "geeft Sanquin daar zelf antwoord op via de site."),
+    }
+
+
+def gereedschap_psychische_hulp(argument: str = "") -> dict:
+    """Waar je terechtkomt als het psychisch niet goed gaat (113 en 112)."""
+    return {
+        "naam": "psychische hulp",
+        "bron": "113.nl",
+        "tekst": ("Denk je aan zelfdoding of gaat het psychisch niet meer? Bel dan 113 (gratis) of "
+                  "chat via https://www.113.nl/ — dat kan 24 uur per dag, anoniem en zonder "
+                  "verwijzing. Bij direct levensgevaar bel je 112. Maak je je zorgen om iemand "
+                  "anders, dan kun je bij 113 ook terecht voor advies; je huisarts of de "
+                  "huisartsenpost kan je doorverwijzen naar de ggz. Je staat er niet alleen voor."),
+    }
+
+
+# ---- Buurt en wonen ---------------------------------------------------------
+
+WINKELSOORTEN = (
+    (("supermarkt",), "supermarket", "supermarkt"),
+    (("bakker",), "bakery", "bakkerij"),
+    (("slager",), "butcher", "slagerij"),
+    (("groente", "fruit"), "greengrocer", "groentewinkel"),
+    (("kaas",), "cheese", "kaaswinkel"),
+    (("kleding",), "clothes", "kledingwinkel"),
+    (("schoenen",), "shoes", "schoenenwinkel"),
+    (("boekhandel", "boeken"), "books", "boekhandel"),
+    (("bouwmarkt", "gamma", "karwei"), "doityourself", "bouwmarkt"),
+    (("drogist", "drogisterij", "etos", "kruidvat"), "chemist", "drogist"),
+    (("bloem", "bloemen"), "florist", "bloemist"),
+    (("fiets",), "bicycle", "fietsenwinkel"),
+    (("meubel",), "furniture", "meubelwinkel"),
+    (("elektro", "electronica"), "electronics", "elektronicawinkel"),
+    (("speelgoed",), "toys", "speelgoedwinkel"),
+    (("kapper", "kapsalon"), "hairdresser", "kapper"),
+    (("opticien", "bril"), "optician", "opticien"),
+    (("sport",), "sports", "sportwinkel"),
+    (("tuincentrum", "tuin"), "garden_centre", "tuincentrum"),
+)
+
+
+def _winkelsoort(tekst: str) -> tuple[str, str]:
+    """Welk soort winkel iemand bedoelt, als OSM-tag en als gewoon woord."""
+    laag = (tekst or "").lower()
+    for woorden, tag, label in WINKELSOORTEN:
+        if any(woord in laag for woord in woorden):
+            return f'"shop"="{tag}"', label
+    return "", ""
+
+
+def gereedschap_openingstijden_winkel(argument: str = "") -> dict:
+    """Wanneer winkels in de buurt open zijn (OpenStreetMap)."""
+    tag, label = _winkelsoort(argument)
+    if not tag:
+        return {"naam": "openingstijden winkel", "bron": "openstreetmap.org", "tekst": "", "fout":
+                "noem het soort winkel, bijvoorbeeld 'openingstijden supermarkt in Utrecht'; ik ken "
+                "onder meer supermarkt, bakkerij, slagerij, drogist, boekhandel, kledingwinkel, "
+                "bloemist en bouwmarkt"}
+    try:
+        regels, nette = _buurt_lijst(_plaats_uit(argument) or GEREEDSCHAP_PLAATS, tag, 1500,
+                                     label, 4, _met_tijden)
+    except Exception as fout:
+        return {"naam": "openingstijden winkel", "bron": "openstreetmap.org", "tekst": "",
+                "fout": str(fout)}
+    if not regels:
+        return {"naam": "openingstijden winkel", "bron": "openstreetmap.org", "tekst":
+                f"In OpenStreetMap staat geen {label} binnen 1,5 kilometer van {nette}."}
+    return {
+        "naam": "openingstijden winkel",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": (f"{label.capitalize()} bij {nette}, met de openingstijden zoals ze in OpenStreetMap "
+                  "staan: " + "; ".join(regels) + ". Openingstijden veranderen vaak en niet elke "
+                  "winkel heeft ze ingevuld; bel bij twijfel even of kijk op de site van de winkel."),
+    }
+
+
+def _school_detail(kenmerken: dict) -> str:
+    """Soort school en tijden, voor zover ze in OpenStreetMap staan."""
+    stukken = []
+    soort = kenmerken.get("school:type") or kenmerken.get("isced:level")
+    if soort:
+        stukken.append(f"soort: {_kort(_schoon(str(soort)), 30)}")
+    tijden = _osm_open(kenmerken.get("opening_hours") or "")
+    if tijden:
+        stukken.append(tijden)
+    return ", ".join(stukken)
+
+
+def gereedschap_scholen(plaats: str = "") -> dict:
+    """Welke scholen er in de buurt zijn (OpenStreetMap)."""
+    try:
+        regels, nette = _buurt_lijst(plaats, '"amenity"="school"', 2500, "school", 5, _school_detail)
+    except Exception as fout:
+        return {"naam": "scholen", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    if not regels:
+        return {"naam": "scholen", "bron": "openstreetmap.org", "tekst":
+                f"In OpenStreetMap staat geen school binnen 2,5 kilometer van {nette}. Probeer een "
+                "grotere plaats in de buurt of kijk op de site van de gemeente."}
+    return {
+        "naam": "scholen",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": (f"Scholen bij {nette}, uit OpenStreetMap: " + "; ".join(regels) + ". OpenStreetMap "
+                  "bevat lang niet alle scholen en zegt niets over de kwaliteit; voor cijfers en "
+                  "ervaringen van ouders kijk je op https://www.scholenopdekaart.nl/ en op de site "
+                  "van de school zelf."),
+    }
+
+
+def _opvang_detail(kenmerken: dict) -> str:
+    """Tijden en soort opvang, voor zover bekend."""
+    stukken = []
+    if str(kenmerken.get("opening_hours", "")).lower().startswith("24"):
+        stukken.append("24 uur per dag")
+    else:
+        tijden = _osm_open(kenmerken.get("opening_hours") or "")
+        if tijden:
+            stukken.append(tijden)
+    if str(kenmerken.get("childcare", "")).lower() in ("bso", "after_school"):
+        stukken.append("bso")
+    return ", ".join(stukken)
+
+
+def gereedschap_kinderopvang(plaats: str = "") -> dict:
+    """Waar kinderdagverblijven en bso's zijn (OpenStreetMap)."""
+    try:
+        regels, nette = _buurt_lijst(plaats, '"amenity"~"^(kindergarten|childcare)$"', 2500,
+                                     "kinderopvang", 5, _opvang_detail)
+    except Exception as fout:
+        return {"naam": "kinderopvang", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    if not regels:
+        return {"naam": "kinderopvang", "bron": "openstreetmap.org", "tekst":
+                f"In OpenStreetMap staat geen kinderdagverblijf of bso binnen 2,5 kilometer van "
+                f"{nette}. Vraag de gemeente om de lijst of kijk op "
+                "https://www.landelijkregisterkinderopvang.nl/."}
+    return {
+        "naam": "kinderopvang",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": (f"Kinderopvang bij {nette}, uit OpenStreetMap: " + "; ".join(regels) + ". Of een "
+                  "opvang geregistreerd is (en dus toeslag mag rekenen) staat in het Landelijk "
+                  "Register Kinderopvang: https://www.landelijkregisterkinderopvang.nl/ ; de "
+                  "gemeente en de opvang zelf weten meer over wachttijden en plekken."),
+    }
+
+
+def _speel_detail(kenmerken: dict) -> str:
+    """Of het een speeltuin of een park is."""
+    soort = str(kenmerken.get("leisure") or "")
+    return {"playground": "speeltuin", "park": "park"}.get(soort, "")
+
+
+def gereedschap_speeltuinen(plaats: str = "") -> dict:
+    """Waar je met kinderen naartoe kunt: speeltuinen en parken (OpenStreetMap)."""
+    try:
+        regels, nette = _buurt_lijst(plaats, '"leisure"~"^(playground|park)$"', 1500,
+                                     "speelplek", 6, _speel_detail)
+    except Exception as fout:
+        return {"naam": "speeltuinen", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    if not regels:
+        return {"naam": "speeltuinen", "bron": "openstreetmap.org", "tekst":
+                f"In OpenStreetMap staat geen speeltuin of park binnen 1,5 kilometer van {nette}. "
+                "Gemeenten leggen hun speelplekken niet altijd in OpenStreetMap vast; op de site van "
+                "je gemeente staat vaak een kaart met alle speeltuinen."}
+    return {
+        "naam": "speeltuinen",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": (f"Speelplekken en parken bij {nette}, uit OpenStreetMap: " + "; ".join(regels)
+                  + ". Dit is wat er in de kaart staat, niet de officiële speelplekkenlijst van de "
+                  "gemeente; kijk daar voor de nieuwste speeltuinen en hun openingstijden."),
+    }
+
+
+def _honden_detail(kenmerken: dict) -> str:
+    """Extraatjes bij een hondenlosloopplek."""
+    stukken = []
+    if str(kenmerken.get("fenced", "")).lower() in ("yes", "ja"):
+        stukken.append("omheind")
+    if str(kenmerken.get("lit", "")).lower() in ("yes", "ja"):
+        stukken.append("verlicht")
+    tijden = _osm_open(kenmerken.get("opening_hours") or "")
+    if tijden:
+        stukken.append(tijden)
+    return ", ".join(stukken)
+
+
+def gereedschap_honden_uitlaatplekken(plaats: str = "") -> dict:
+    """Waar de hond los mag lopen (OpenStreetMap)."""
+    try:
+        regels, nette = _buurt_lijst(plaats, '"leisure"="dog_park"', 3000,
+                                     "hondenlosloopgebied", 4, _honden_detail)
+    except Exception as fout:
+        return {"naam": "honden uitlaatplekken", "bron": "openstreetmap.org", "tekst": "",
+                "fout": str(fout)}
+    if not regels:
+        return {"naam": "honden uitlaatplekken", "bron": "openstreetmap.org", "tekst":
+                f"In OpenStreetMap staat geen hondenlosloopgebied binnen 3 kilometer van {nette}. "
+                "In veel gemeenten mogen honden ook in delen van parken en bossen loslopen, met "
+                "tijden of zones; de regels staan op de site van je gemeente en in de APV."}
+    return {
+        "naam": "honden uitlaatplekken",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": (f"Losloopplekken voor honden bij {nette}, uit OpenStreetMap: " + "; ".join(regels)
+                  + ". Gemeentelijke uitlaatplekken staan niet overal in OpenStreetMap; kijk voor de "
+                  "precieze zones en regels (aanlijnen, opruimen) bij je gemeente."),
+    }
+
+
+def _automaat_detail(kenmerken: dict) -> str:
+    """Tijden en of je er ook kunt storten."""
+    stukken = []
+    tijden = _osm_open(kenmerken.get("opening_hours") or "")
+    if tijden:
+        stukken.append(tijden)
+    if str(kenmerken.get("cash_in", "")).lower() in ("yes", "ja"):
+        stukken.append("geld storten kan ook")
+    return ", ".join(stukken)
+
+
+def gereedschap_geldautomaat(plaats: str = "") -> dict:
+    """Waar de dichtstbijzijnde pinautomaat is (OpenStreetMap)."""
+    try:
+        regels, nette = _buurt_lijst(plaats, '"amenity"="atm"', 1500, "geldautomaat", 5,
+                                     _automaat_detail)
+    except Exception as fout:
+        return {"naam": "geldautomaat", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    if not regels:
+        return {"naam": "geldautomaat", "bron": "openstreetmap.org", "tekst":
+                f"In OpenStreetMap staat geen geldautomaat binnen 1,5 kilometer van {nette}. "
+                "Veel automaten in Nederland zijn van Geldmaat; in de Geldmaat-app of op "
+                "https://www.geldmaat.nl/ zoek je de dichtstbijzijnde automaat die het nu doet."}
+    return {
+        "naam": "geldautomaat",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": (f"Geldautomaten bij {nette}, uit OpenStreetMap: " + "; ".join(regels) + ". Veel "
+                  "automaten in Nederland zijn van Geldmaat, het netwerk van de grote banken. Hangt "
+                  "de automaat in een winkel of hal, dan gelden de openingstijden van dat gebouw."),
+    }
+
+
+def _bus_detail(kenmerken: dict) -> str:
+    """Leegtijden van een brievenbus."""
+    leegtijden = kenmerken.get("collection_times") or kenmerken.get("opening_hours")
+    if not leegtijden:
+        return ""
+    return "geleegd: " + _kort(_schoon(str(leegtijden)), 60)
+
+
+def gereedschap_brievenbus(plaats: str = "") -> dict:
+    """Waar je een brief kunt posten (OpenStreetMap)."""
+    try:
+        regels, nette = _buurt_lijst(plaats, '"amenity"="post_box"', 1000, "brievenbus", 5,
+                                     _bus_detail)
+    except Exception as fout:
+        return {"naam": "brievenbus", "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    if not regels:
+        return {"naam": "brievenbus", "bron": "openstreetmap.org", "tekst":
+                f"In OpenStreetMap staat geen brievenbus binnen een kilometer van {nette}. Op "
+                "https://www.postnl.nl/klantenservice/ (zoek op 'brievenbus') staan de "
+                "brievenbussen van PostNL; op het bordje bij de bus staat hoe laat de laatste "
+                "lichting is."}
+    return {
+        "naam": "brievenbus",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": (f"Brievenbussen bij {nette}, uit OpenStreetMap: " + "; ".join(regels) + ". Op het "
+                  "bordje bij de bus staat de tijd van de laatste lichting; die tijden staan niet "
+                  "altijd in OpenStreetMap, dus reken op het bordje."),
+    }
+
+
+RECYCLING_NAMEN = {
+    "glass": "glas", "glass_bottles": "glas", "paper": "papier", "cardboard": "karton",
+    "paper_packaging": "karton", "clothes": "textiel", "shoes": "schoenen", "plastic": "plastic",
+    "plastic_packaging": "plastic", "metal": "metaal", "scrap_metal": "schroot", "cans": "blik",
+    "drink_cans": "blik", "batteries": "batterijen", "green_waste": "gft", "food_waste": "gft",
+    "cooking_oil": "frituurvet", "printer_cartridges": "printerinkt",
+}
+
+
+def _glasbak_detail(kenmerken: dict) -> str:
+    """Welke stoffen je bij dit inzamelpunt kwijt kunt."""
+    stoffen = []
+    for sleutel, waarde in kenmerken.items():
+        if not str(sleutel).startswith("recycling:"):
+            continue
+        if str(waarde).lower() in ("no", "false", "geen"):
+            continue
+        naam = RECYCLING_NAMEN.get(str(sleutel).split(":", 1)[1], "")
+        if naam and naam not in stoffen:
+            stoffen.append(naam)
+    if "glas" in stoffen:
+        stoffen.remove("glas")
+        stoffen.insert(0, "glas")
+    tijden = _osm_open(kenmerken.get("opening_hours") or "")
+    stukken = []
+    if stoffen:
+        stukken.append("voor " + ", ".join(stoffen[:5]))
+    if tijden:
+        stukken.append(tijden)
+    return ", ".join(stukken)
+
+
+def gereedschap_glasbak(plaats: str = "") -> dict:
+    """Waar je glas, papier en textiel kwijt kunt (OpenStreetMap)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "glasbak en afvalpunt", "bron": "openstreetmap.org", "tekst": "",
+                "fout": "geen plaats opgegeven"}
+    try:
+        plekken, nette = _osm_nabij(plaats, '"amenity"="recycling"', 1500, 20)
+    except Exception as fout:
+        return {"naam": "glasbak en afvalpunt", "bron": "openstreetmap.org", "tekst": "",
+                "fout": str(fout)}
+    met_glas = [stuk for stuk in plekken if "glass" in " ".join(stuk[2])]
+    gekozen = (met_glas or plekken)[:5]
+    if not gekozen:
+        return {"naam": "glasbak en afvalpunt", "bron": "openstreetmap.org", "tekst":
+                f"In OpenStreetMap staat geen glasbak of inzamelpunt binnen 1,5 kilometer van "
+                f"{nette}. Op de afvalpagina van je gemeente staat de volledige lijst met "
+                "inzamelpunten en wat waar in mag."}
+    regels = []
+    for afstand, naam, kenmerken in gekozen:
+        stuk = f"{naam or 'inzamelpunt'} ({_getal(afstand, ' km')})"
+        detail = _glasbak_detail(kenmerken)
+        if detail:
+            stuk += f" — {detail}"
+        regels.append(stuk)
+    eerste = ("Deze punten hebben een glascontainer. " if met_glas else
+              "Bij deze punten staat geen glas in OpenStreetMap; misschien zijn het containers "
+              "voor iets anders. ")
+    return {
+        "naam": "glasbak en afvalpunt",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": ("Glasbakken en inzamelpunten bij " + nette + ", uit OpenStreetMap: "
+                  + "; ".join(regels) + ". " + eerste + "Glasbakken van de gemeente staan niet "
+                  "overal in OpenStreetMap; de afvalpagina van je gemeente heeft de volledige "
+                  "lijst, en daar staat ook wat wel en niet in de bak mag."),
+    }
+
+
+def _bad_detail(kenmerken: dict) -> str:
+    """Openingstijden en binnen of buiten zwemmen."""
+    stukken = []
+    binnen = str(kenmerken.get("indoor", "")).lower()
+    if binnen in ("yes", "ja"):
+        stukken.append("binnenbad")
+    elif binnen in ("no", "nee"):
+        stukken.append("buitenbad")
+    tijden = _osm_open(kenmerken.get("opening_hours") or "")
+    if tijden:
+        stukken.append(tijden)
+    return ", ".join(stukken)
+
+
+def gereedschap_bibliotheek_en_zwembad(plaats: str = "") -> dict:
+    """Waar de bibliotheek en het zwembad zijn (OpenStreetMap)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "bibliotheek en zwembad", "bron": "openstreetmap.org", "tekst": "",
+                "fout": "geen plaats opgegeven"}
+    stukken = []
+    nette = ""
+    for tag, soort, meervoud, extra in (('"amenity"="library"', "bibliotheek", "bibliotheken",
+                                         _met_tijden),
+                                        ('"leisure"="swimming_pool"', "zwembad", "zwembaden",
+                                         _bad_detail)):
+        try:
+            regels, nette = _buurt_lijst(plaats, tag, 3000, soort, 3, extra)
+        except Exception as fout:
+            stukken.append(f"de {meervoud} konden niet worden opgehaald ({fout})")
+            continue
+        if regels:
+            stukken.append(f"{soort.capitalize()} bij {nette}: " + "; ".join(regels))
+        else:
+            stukken.append(f"geen {soort} gevonden binnen 3 kilometer van {nette}")
+    if all("niet worden opgehaald" in stuk for stuk in stukken):
+        return {"naam": "bibliotheek en zwembad", "bron": "openstreetmap.org", "tekst": "",
+                "fout": "openstreetmap gaf geen antwoord; probeer het over een minuut opnieuw"}
+    return {
+        "naam": "bibliotheek en zwembad",
+        "bron": "openstreetmap.org (Overpass, ODbL)",
+        "tekst": (" | ".join(stukken) + ". Voor openingstijden, banen zwemmen en het aanbod kun je "
+                  "het beste op de site van de bieb of het zwembad zelf kijken."),
+    }
+
+
+def gereedschap_bestemmingsplan(argument: str = "") -> dict:
+    """Waar je de regels voor bouwen op een adres vindt (Omgevingsloket)."""
+    vraag = _kort(_schoon(argument or ""), 60)
+    waar = f"Voor '{vraag}' kan ik dat niet opvragen: " if vraag else ""
+    return {
+        "naam": "bestemmingsplan",
+        "bron": "omgevingsloket.nl en ruimtelijkeplannen.nl",
+        "tekst": (waar + "wat er op een plek mag, staat in het omgevingsplan (het vroegere "
+                  "bestemmingsplan), en dat is per adres gratis te bekijken via het Omgevingsloket: "
+                  "https://omgevingsloket.nl/ (kies daar 'Regels op de kaart' en vul het adres in). "
+                  "De plannen zelf staan ook op https://www.ruimtelijkeplannen.nl/. Er is geen open "
+                  "API zonder sleutel voor per adres, dus ik kan de regels hier niet voor je "
+                  "ophalen. Wil je bouwen of verbouwen, vraag dan de gemeente om mee te denken en "
+                  "check of je een omgevingsvergunning nodig hebt."),
+    }
+
+
+def _vlak_punten(onderdeel: object) -> list[tuple[float, float]]:
+    """Alle coördinaten uit een GeoJSON-vlak of -verzameling peuteren."""
+    punten: list[tuple[float, float]] = []
+    if isinstance(onderdeel, (list, tuple)):
+        if (len(onderdeel) >= 2 and isinstance(onderdeel[0], (int, float))
+                and isinstance(onderdeel[1], (int, float))):
+            punten.append((float(onderdeel[0]), float(onderdeel[1])))
+        else:
+            for stuk in onderdeel:
+                punten.extend(_vlak_punten(stuk))
+    return punten
+
+
+def _leefbaarometer_buurt(breedte: float, lengte: float) -> dict:
+    """De buurt en de leefbaarheidsscores van de Leefbaarometer bij een punt."""
+    velden = "geom,name,gemeente,year,lbm,afw,kscore,kfys,konv,ksoc,kvrz,kwon"
+    rand = 0.004
+    adres = ("https://geo.leefbaarometer.nl/lbm3/ows?service=WFS&version=2.0.0&request=GetFeature"
+             "&typeNames=lbm3:buurtscore24&outputFormat=application/json&srsName=EPSG:4326"
+             f"&propertyName={velden}&count=10"
+             f"&bbox={lengte - rand},{breedte - rand},{lengte + rand},{breedte + rand},EPSG:4326")
+    gegevens = _haal_json(adres, limiet=25)
+    treffers = [stuk for stuk in ((gegevens or {}).get("features") or []) if stuk.get("properties")]
+    if not treffers:
+        raise ValueError("de leefbaarometer heeft geen gegevens voor deze plek")
+    def randen(stuk: dict):
+        coil = (stuk.get("geometry") or {}).get("coordinates") or []
+        punten = _vlak_punten(coil)
+        if not punten:
+            return None
+        xs = [punt[0] for punt in punten]
+        ys = [punt[1] for punt in punten]
+        return min(xs), max(xs), min(ys), max(ys)
+    beste = None
+    for stuk in treffers:
+        vak = randen(stuk)
+        if vak and vak[0] <= lengte <= vak[1] and vak[2] <= breedte <= vak[3]:
+            oppervlak = (vak[1] - vak[0]) * (vak[3] - vak[2])
+            if beste is None or oppervlak < beste[0]:
+                beste = (oppervlak, stuk)
+    if beste is None:
+        dichtst = None
+        for stuk in treffers:
+            vak = randen(stuk)
+            if not vak:
+                continue
+            afstand = (((vak[0] + vak[1]) / 2 - lengte) ** 2
+                       + ((vak[2] + vak[3]) / 2 - breedte) ** 2)
+            if dichtst is None or afstand < dichtst[0]:
+                dichtst = (afstand, stuk)
+        if dichtst is None:
+            raise ValueError("de leefbaarometer gaf geen bruikbare buurt terug")
+        beste = (0.0, dichtst[1])
+    return beste[1]["properties"]
+
+
+def gereedschap_leefbaarheid_buurt(plaats: str = "") -> dict:
+    """Hoe leefbaar de buurt is volgens de Leefbaarometer (WFS van BZK)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "leefbaarheid buurt", "bron": "leefbaarometer.nl", "tekst": "",
+                "fout": "geen plaats opgegeven"}
+    try:
+        breedte, lengte, nette = _coordinaten(plaats)
+        buurt = _leefbaarometer_buurt(breedte, lengte)
+    except Exception as fout:
+        return {"naam": "leefbaarheid buurt", "bron": "leefbaarometer.nl", "tekst": "",
+                "fout": f"{fout} (de cijfers staan ook op https://www.leefbaarometer.nl/)"}
+    naam = _schoon(str(buurt.get("name") or "onbekende buurt"))
+    gemeente = _schoon(str(buurt.get("gemeente") or ""))
+    jaar = buurt.get("year") or 2024
+    stukken = []
+    klasse = buurt.get("kscore")
+    if isinstance(klasse, (int, float)):
+        stukken.append(f"waarderingsklasse {_getal(klasse, komma=False)} van 9, waarbij 9 het "
+                       "best is (het landelijk gemiddelde zit rond klasse 5)")
+    afwijking = buurt.get("afw")
+    if isinstance(afwijking, (int, float)):
+        richting = "boven" if afwijking >= 0 else "onder"
+        stukken.append(f"een afwijking van {_getal(abs(afwijking))} standaardafwijking {richting} "
+                       "het landelijk gemiddelde")
+    tekst = (f"De buurt '{naam}'" + (f" in gemeente {gemeente}" if gemeente else "")
+             + f", bij {nette} (meting {jaar}), scoort"
+             + (" een " if stukken else " geen score ")
+             + " en ".join(stukken) + ".")
+    delen = []
+    for sleutel, label in (("kfys", "fysieke omgeving"), ("konv", "voorzieningen"),
+                           ("ksoc", "sociale samenhang"), ("kvrz", "veiligheid"),
+                           ("kwon", "woningvoorraad")):
+        waarde = buurt.get(sleutel)
+        if isinstance(waarde, (int, float)):
+            delen.append(f"{label} {_getal(waarde, komma=False)}")
+    if delen:
+        tekst += (" De deelklassen per dimensie, op een schaal van 1 tot 9 waarbij 5 gemiddeld is: "
+                  + ", ".join(delen) + ".")
+    tekst += (" Bron: Leefbaarometer 3.0 van het ministerie van Binnenlandse Zaken en "
+              "Koninkrijksrelaties (https://www.leefbaarometer.nl/). Het is een modelmatige "
+              "schatting per buurt op basis van omgevingskenmerken, geen oordeel van de bewoners.")
+    return {"naam": "leefbaarheid buurt", "bron": f"leefbaarometer.nl (buurtscore {jaar})",
+            "tekst": tekst}
+
+
+def gereedschap_energielabel(argument: str = "") -> dict:
+    """Hoe je het energielabel van een woning vindt (EP-Online)."""
+    postcode = re.search(r"\b(\d{4})\s*([A-Za-z]{2})\b", argument or "")
+    voor = f" voor {postcode.group(1)} {postcode.group(2).upper()}" if postcode else ""
+    return {
+        "naam": "energielabel woning",
+        "bron": "ep-online.nl (RVO)",
+        "tekst": (f"Het energielabel van een woning{voor} staat in EP-Online, de officiële landelijke "
+                  "database van RVO: https://www.ep-online.nl/ . Daar zoek je gratis op postcode en "
+                  "huisnummer (of op BAG-id) en zie je het laatst geregistreerde label. Ik kan het "
+                  "hier niet voor je opzoeken: de open data van EP-Online vragen een gratis "
+                  "API-sleutel, en sleutels bewaar ik niet. Klopt het label niet of ontbreekt het, "
+                  "dan kan de eigenaar via een adviseur een nieuw label laten opnemen."),
+    }
+
+
+def gereedschap_bouwprojecten(plaats: str = "") -> dict:
+    """Wat er in de buurt gebouwd wordt, uit de nieuwsberichten."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "bouwprojecten", "bron": "Google Nieuws", "tekst": "",
+                "fout": "geen plaats opgegeven"}
+    titels = _nieuwsfeed(f"nieuwbouw {plaats}", "nieuwbouw")
+    if not titels:
+        return {"naam": "bouwprojecten", "bron": "Google Nieuws", "tekst": "", "fout":
+                f"geen nieuwsberichten over nieuwbouw in {plaats} gevonden"}
+    return {
+        "naam": "bouwprojecten",
+        "bron": "Google Nieuws (nieuwbouw)",
+        "tekst": (f"Wat er de laatste tijd over bouwen in en rond {plaats} in het nieuws was: "
+                  + "; ".join(titels[:5]) + ". Dit zijn nieuwskoppen, geen officiële projectlijst; "
+                  "voor planningen en vergunningen kijk je bij de gemeente of in het Omgevingsloket "
+                  "(https://omgevingsloket.nl/)."),
+    }
+
+# ---- K. weer en natuur, en alles wat met reizen te maken heeft ---------------
+#
+# Hergebruikt de hulpfuncties van hierboven: _haal, _haal_json, _schoon, _kort,
+# _getal, _coordinaten, _overpass, _osm_nabij, _nieuwsfeed, _plaats_uit, _weg_uit,
+# _ndw_ruw, _weg_en_plaats en het WMO-tabel. Alleen wat hieronder met een _ begint
+# is nieuw gereedschap.
+
+RIVIER_WWS = ("https://ddapi20-waterwebservices.rijkswaterstaat.nl/"
+              "ONLINEWAARNEMINGENSERVICES/OphalenWaarnemingen")
+RIVIER_PUNTEN = (
+    ("rijn", "lobith.bovenrijn.tolkamer", "de Rijn bij Lobith"),
+    ("maas", "eijsden.grens", "de Maas bij Eijsden"),
+)
+WINDSTREKEN = ("N", "NNO", "NO", "ONO", "O", "OZO", "ZO", "ZZO",
+               "Z", "ZZW", "ZW", "WZW", "W", "WNW", "NW", "NNW")
+LUCHTKWALITEIT = ((20, "goed"), (40, "redelijk"), (60, "matig"),
+                  (80, "slecht"), (100, "zeer slecht"))
+
+
+def _kompas(graden: object) -> str:
+    """Windrichting in graden naar de letters die het KNMI gebruikt (N, NNO, ...)."""
+    try:
+        hoek = float(graden) % 360
+    except (TypeError, ValueError):
+        return ""
+    return WINDSTREKEN[int((hoek + 11.25) // 22.5) % 16]
+
+
+def _lokale_tijdzone() -> str:
+    """De afwijking van deze machine als '+01:00', voor de bronnen die dat vragen."""
+    afwijking = datetime.datetime.now().astimezone().utcoffset() or datetime.timedelta(hours=1)
+    teken = "+" if afwijking >= datetime.timedelta(0) else "-"
+    return f"{teken}{abs(afwijking).seconds // 3600:02d}:00"
+
+
+def _kenteken_uit(tekst: str) -> str:
+    """Een Nederlands kenteken uit de vraag halen: '1-XBA-01', 'KP 123 X' of '03PGJV'."""
+    ruw = re.sub(r"\s+", " ", (tekst or "").upper())
+    for stuk in re.findall(r"[A-Z0-9][A-Z0-9\-]{3,10}[A-Z0-9]", ruw):
+        kaal = re.sub(r"[^A-Z0-9]", "", stuk)
+        if 5 <= len(kaal) <= 8 and re.search(r"[0-9]", kaal) and re.search(r"[A-Z]", kaal):
+            return kaal
+    return ""
+
+
+def _datum_nl(ruw: object) -> str:
+    """'20260610' of '2026-06-10T00:00' naar '10-06-2026'."""
+    cijfers = re.sub(r"[^0-9]", "", str(ruw or "")[:10])
+    if len(cijfers) >= 8 and cijfers[0:4].isdigit():
+        return f"{cijfers[6:8]}-{cijfers[4:6]}-{cijfers[0:4]}"
+    return ""
+
+
+def _dagen_tot(datum: str) -> int:
+    """Hoeveel dagen er nog zijn tot een datum als '10-06-2026' (negatief is verstreken)."""
+    stukken = re.split(r"[^0-9]+", datum or "")
+    if len(stukken) >= 3 and len(stukken[2]) == 4:
+        try:
+            einde = datetime.date(int(stukken[2]), int(stukken[1]), int(stukken[0]))
+        except ValueError:
+            return 0
+        return (einde - datetime.date.today()).days
+    return 0
+
+
+def _komende_uren(blok: dict, sleutels: list, aantal: int = 6, stap: int = 1) -> list:
+    """De eerstvolgende uren uit een Open-Meteo-blok: [(tijd, (waarde per sleutel)), ...]."""
+    tijden = (blok or {}).get("time") or []
+    reeksen = [(blok or {}).get(sleutel) or [] for sleutel in sleutels]
+    nu = datetime.datetime.now().strftime("%Y-%m-%dT%H")
+    begin = 0
+    for plek, tijd in enumerate(tijden):
+        if str(tijd)[:13] >= nu:
+            begin = plek
+            break
+    uit = []
+    for plek in range(begin, min(len(tijden), begin + aantal * stap), stap):
+        waarden = tuple(reeks[plek] if plek < len(reeks) else None for reeks in reeksen)
+        uit.append((str(tijden[plek])[11:16], waarden))
+    return uit
+
+
+def _weer_plaats(plaats: str, bron: str) -> tuple:
+    """Plaats naar coördinaten met een nette fout als het niet lukt."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        raise ValueError("geen plaats opgegeven")
+    return _coordinaten(plaats)
+
+
+def _toestel_uit(tekst: str) -> tuple:
+    """Een Mode-S-code (zes hextekens) of een registratie (PH-BXA, N123AB) uit de vraag halen."""
+    ruw = (tekst or "").upper()
+    for stuk in re.findall(r"\b[0-9A-F]{6}\b", ruw):
+        if re.search(r"[0-9]", stuk):
+            return stuk, "hex"
+    for stuk in re.findall(r"\b[A-Z]{1,2}-[A-Z0-9]{2,5}\b|\bN[0-9]{2,5}[A-Z]{0,2}\b", ruw):
+        return stuk, "registratie"
+    return "", ""
+
+
+def _mmsi_uit(tekst: str) -> str:
+    """Een MMSI-nummer (negen cijfers) uit de vraag halen."""
+    for stuk in re.findall(r"\d[\d\s\-]{7,13}\d", tekst or ""):
+        kaal = re.sub(r"[^0-9]", "", stuk)
+        if len(kaal) == 9:
+            return kaal
+    return ""
+
+
+def _vlag_uit_mmsi(mmsi: str) -> str:
+    """Het land dat bij de eerste drie cijfers (MID) van een MMSI hoort."""
+    mid = {"244": "Nederland", "245": "Nederland", "246": "Nederland",
+           "205": "België", "206": "België", "211": "Duitsland", "218": "Duitsland",
+           "226": "Frankrijk", "227": "Frankrijk", "228": "Frankrijk",
+           "232": "Verenigd Koninkrijk", "233": "Verenigd Koninkrijk",
+           "234": "Verenigd Koninkrijk", "235": "Verenigd Koninkrijk",
+           "431": "Japan", "432": "Japan", "477": "Hongkong",
+           "538": "Marshalleilanden", "563": "Singapore", "564": "Singapore",
+           "565": "Singapore", "566": "Singapore", "636": "Liberia"}
+    return mid.get((mmsi or "")[:3], "")
+
+
+def _plek_tekst(breedte: float, lengte: float) -> str:
+    """Een leesbare plek bij coördinaten (via PDOK), anders de coördinaten zelf."""
+    return (_weg_en_plaats(breedte, lengte)
+            or f"{_getal(breedte)}° noorderbreedte, {_getal(lengte)}° oosterlengte")
+
+
+def _omgeving_tekst(zoek: str) -> str:
+    """Een zoekterm voor occasions schoonvegen tot de kern (bijvoorbeeld 'volkswagen polo')."""
+    schoon = re.sub(
+        r"(?i)\b(zoek|zoeken|occasions?|tweedehands|gebruikte|auto'?s?|wagens?|marktplaats|"
+        r"wat kost|prijs|kosten|van|een|de|het|in|bij|onder|tot|maximaal|max|rond|omgeving)\b",
+        " ", zoek or "")
+    schoon = re.sub(r"[€$]?\s*\d[\d.,]*", " ", schoon)
+    return re.sub(r"\s+", " ", schoon).strip()[:60]
+
+
+# ---- weer en natuur --------------------------------------------------------
+
+
+def gereedschap_gevoelstemperatuur(plaats: str) -> dict:
+    """Hoe koud het voelt, met wind en vocht meegerekend (Open-Meteo)."""
+    naam, bron = "gevoelstemperatuur", "open-meteo.com"
+    try:
+        breedte, lengte, nette = _weer_plaats(plaats, bron)
+        gegevens = _haal_json(
+            "https://api.open-meteo.com/v1/forecast?"
+            f"latitude={breedte}&longitude={lengte}&timezone=Europe/Amsterdam"
+            "&current=apparent_temperature,temperature_2m,wind_speed_10m,relative_humidity_2m"
+            "&hourly=apparent_temperature&forecast_days=1",
+            limiet=20,
+        )
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    nu = (gegevens or {}).get("current") or {}
+    voelt, echt = nu.get("apparent_temperature"), nu.get("temperature_2m")
+    if not isinstance(voelt, (int, float)) or not isinstance(echt, (int, float)):
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen temperatuur ontvangen"}
+    tekst = (f"In {nette} voelt het {_getal(voelt, ' °C')}, terwijl de thermometer "
+             f"{_getal(echt, ' °C')} aanwijst")
+    extra = []
+    if isinstance(nu.get("wind_speed_10m"), (int, float)):
+        extra.append(f"wind {_getal(nu.get('wind_speed_10m'), ' km/u')}")
+    if isinstance(nu.get("relative_humidity_2m"), (int, float)):
+        extra.append(f"luchtvochtigheid {_getal(nu.get('relative_humidity_2m'), '%')}")
+    if extra:
+        tekst += " (" + ", ".join(extra) + ")"
+    verschil = voelt - echt
+    tekst += "."
+    if verschil <= -2:
+        tekst += " Het voelt kouder dan het is, vooral door de wind."
+    elif verschil >= 2:
+        tekst += " Het voelt warmer dan het is."
+    uren = _komende_uren((gegevens or {}).get("hourly") or {}, ["apparent_temperature"], 24, 1)
+    waarden = [(tijd, stuk[0]) for tijd, stuk in uren if isinstance(stuk[0], (int, float))]
+    if waarden:
+        koudst = min(waarden, key=lambda paar: paar[1])
+        warmst = max(waarden, key=lambda paar: paar[1])
+        tekst += (f" Vandaag loopt het gevoel van {_getal(koudst[1], ' °C')} rond {koudst[0]} "
+                  f"tot {_getal(warmst[1], ' °C')} rond {warmst[0]}.")
+    return {"naam": naam, "bron": bron + " (gevoelstemperatuur)", "tekst": tekst}
+
+
+def gereedschap_dauwpunt(plaats: str) -> dict:
+    """Luchtvochtigheid en dauwpunt nu, met het verloop per uur (Open-Meteo)."""
+    naam, bron = "dauwpunt", "open-meteo.com"
+    try:
+        breedte, lengte, nette = _weer_plaats(plaats, bron)
+        gegevens = _haal_json(
+            "https://api.open-meteo.com/v1/forecast?"
+            f"latitude={breedte}&longitude={lengte}&timezone=Europe/Amsterdam"
+            "&current=relative_humidity_2m,dew_point_2m"
+            "&hourly=dew_point_2m,relative_humidity_2m&forecast_days=2",
+            limiet=20,
+        )
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    nu = (gegevens or {}).get("current") or {}
+    dauw, vocht = nu.get("dew_point_2m"), nu.get("relative_humidity_2m")
+    if not isinstance(dauw, (int, float)):
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen dauwpunt ontvangen"}
+    beleving = ("de lucht voelt klam" if dauw >= 16 else "de lucht voelt drukkend" if dauw >= 20
+                else "de lucht voelt droog" if dauw <= 2 else "de lucht voelt gewoon")
+    tekst = (f"In {nette} is de lucht {_getal(vocht, '%')} vochtig en ligt het dauwpunt op "
+             f"{_getal(dauw, ' °C')}; {beleving}.")
+    uren = _komende_uren((gegevens or {}).get("hourly") or {}, ["dew_point_2m"], 6, 2)
+    regels = [f"{tijd} {_getal(stuk[0], ' °C')}" for tijd, stuk in uren
+              if isinstance(stuk[0], (int, float))]
+    if regels:
+        tekst += " Dauwpunt de komende uren: " + ", ".join(regels) + "."
+    tekst += (" Het dauwpunt is de temperatuur waarop waterdamp neerslaat; onder het "
+              "dauwpunt ontstaat condens of mist.")
+    return {"naam": naam, "bron": bron + " (dauwpunt en vocht)", "tekst": tekst}
+
+
+def gereedschap_zicht(plaats: str) -> dict:
+    """Hoe ver je kunt kijken en of er mist hangt (Open-Meteo)."""
+    naam, bron = "zicht", "open-meteo.com"
+    try:
+        breedte, lengte, nette = _weer_plaats(plaats, bron)
+        gegevens = _haal_json(
+            "https://api.open-meteo.com/v1/forecast?"
+            f"latitude={breedte}&longitude={lengte}&timezone=Europe/Amsterdam"
+            "&current=visibility,weather_code&hourly=visibility,weather_code&forecast_days=2",
+            limiet=20,
+        )
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    nu = (gegevens or {}).get("current") or {}
+    zicht, code = nu.get("visibility"), nu.get("weather_code")
+    if not isinstance(zicht, (int, float)):
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen zicht ontvangen"}
+
+    def _afstand(meters: float) -> str:
+        return (f"{_getal(meters / 1000, ' km')}" if meters >= 1000
+                else f"{_getal(meters, ' meter')}")
+
+    weer = WMO.get(int(code), "") if isinstance(code, (int, float)) else ""
+    tekst = (f"In {nette} kun je {_afstand(float(zicht))} ver kijken"
+             + (f" ({weer})" if weer else "") + ".")
+    slecht = (float(zicht) < 1000)
+    uren = _komende_uren((gegevens or {}).get("hourly") or {}, ["visibility", "weather_code"], 12, 1)
+    punten = [(tijd, stuk[0], stuk[1]) for tijd, stuk in uren if isinstance(stuk[0], (int, float))]
+    if punten:
+        minst = min(punten, key=lambda stuk: stuk[1])
+        mist = WMO.get(int(minst[2]), "") if isinstance(minst[2], (int, float)) else ""
+        tekst += (f" Het slechtste zicht van de komende twaalf uur is {_afstand(minst[1])} "
+                  f"rond {minst[0]}" + (f" ({mist})" if mist else "") + ".")
+        if mist in ("mist", "mist met rijp") and minst[1] < 5000:
+            tekst += " Dat is echt mistweer."
+        elif minst[1] < 2000:
+            tekst += " Dat is nevel of mist."
+    elif slecht:
+        tekst += " Er hangt nu nevel of mist."
+    return {"naam": naam, "bron": bron + " (zicht en nevel)", "tekst": tekst}
+
+
+def gereedschap_sneeuw(plaats: str) -> dict:
+    """Hoeveel sneeuw er valt en hoe hoog de sneeuwgrens zit (Open-Meteo)."""
+    naam, bron = "sneeuw", "open-meteo.com"
+    try:
+        breedte, lengte, nette = _weer_plaats(plaats, bron)
+        gegevens = _haal_json(
+            "https://api.open-meteo.com/v1/forecast?"
+            f"latitude={breedte}&longitude={lengte}&timezone=Europe/Amsterdam"
+            "&current=snowfall,freezing_level_height&daily=snowfall_sum&hourly=snowfall"
+            "&forecast_days=3",
+            limiet=20,
+        )
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    nu = (gegevens or {}).get("current") or {}
+    val, grens = nu.get("snowfall"), nu.get("freezing_level_height")
+    if not isinstance(val, (int, float)):
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen sneeuwgegevens ontvangen"}
+    tekst = (f"In {nette} valt nu geen sneeuw." if val <= 0.05
+             else f"In {nette} valt nu sneeuw ({_getal(val, ' cm per uur')}).")
+    if isinstance(grens, (int, float)):
+        tekst += f" De sneeuwgrens hangt op {_getal(grens, ' meter', komma=False)}."
+    dagen = (gegevens or {}).get("daily") or {}
+    datums = dagen.get("time") or []
+    sommen = dagen.get("snowfall_sum") or []
+    regels = [f"{str(datums[plek])[8:10]}-{str(datums[plek])[5:7]}: {_getal(som, ' cm')}"
+              for plek, som in enumerate(sommen) if isinstance(som, (int, float))]
+    if regels:
+        totaal = sum(som for som in sommen if isinstance(som, (int, float)))
+        tekst += " Verwacht per dag: " + ", ".join(regels) + "."
+        tekst += (" Er staat dus niets in de verwachting." if totaal <= 0.05
+                  else f" Dat is samen {_getal(totaal, ' cm')}.")
+    uren = _komende_uren((gegevens or {}).get("hourly") or {}, ["snowfall"], 24, 1)
+    zwaarst = max(((tijd, stuk[0]) for tijd, stuk in uren if isinstance(stuk[0], (int, float))),
+                  key=lambda paar: paar[1], default=None)
+    if zwaarst and zwaarst[1] > 0.05:
+        tekst += f" Het hardst sneeuwt het rond {zwaarst[0]} met {_getal(zwaarst[1], ' cm per uur')}."
+    return {"naam": naam, "bron": bron + " (sneeuw en sneeuwgrens)", "tekst": tekst}
+
+
+def gereedschap_windrichting(plaats: str) -> dict:
+    """Uit welke hoek de wind komt, nu en per uur (Open-Meteo)."""
+    naam, bron = "windrichting", "open-meteo.com"
+    try:
+        breedte, lengte, nette = _weer_plaats(plaats, bron)
+        gegevens = _haal_json(
+            "https://api.open-meteo.com/v1/forecast?"
+            f"latitude={breedte}&longitude={lengte}&timezone=Europe/Amsterdam"
+            "&current=wind_direction_10m,wind_speed_10m,wind_gusts_10m"
+            "&hourly=wind_direction_10m,wind_speed_10m&forecast_days=1",
+            limiet=20,
+        )
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    nu = (gegevens or {}).get("current") or {}
+    graden = nu.get("wind_direction_10m")
+    if not isinstance(graden, (int, float)):
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen windrichting ontvangen"}
+    streek = _kompas(graden)
+    tekst = f"De wind in {nette} komt uit het {streek} ({_getal(graden, '°', komma=False)})"
+    if isinstance(nu.get("wind_speed_10m"), (int, float)):
+        tekst += f" met {_getal(nu.get('wind_speed_10m'), ' km/u')}"
+    if isinstance(nu.get("wind_gusts_10m"), (int, float)):
+        tekst += f" en uitschieters tot {_getal(nu.get('wind_gusts_10m'), ' km/u')}"
+    tekst += ". Dat is de hoek waar de wind vandáán komt."
+    uren = _komende_uren((gegevens or {}).get("hourly") or {}, ["wind_direction_10m"], 6, 2)
+    regels = [f"{tijd} {_kompas(stuk[0])}" for tijd, stuk in uren
+              if isinstance(stuk[0], (int, float))]
+    if regels:
+        tekst += " Komende uren: " + ", ".join(regels) + "."
+        if len(set(stuk.split()[-1] for stuk in regels)) == 1:
+            tekst += " De wind houdt dezelfde richting aan."
+        else:
+            tekst += " De wind draait dus."
+    return {"naam": naam, "bron": bron + " (windrichting)", "tekst": tekst}
+
+
+def gereedschap_fijnstof(plaats: str) -> dict:
+    """Luchtkwaliteit met PM10, PM2,5 en NO2 (Open-Meteo)."""
+    naam, bron = "fijnstof", "open-meteo.com (luchtkwaliteit)"
+    try:
+        breedte, lengte, nette = _weer_plaats(plaats, bron)
+        gegevens = _haal_json(
+            "https://air-quality-api.open-meteo.com/v1/air-quality?"
+            f"latitude={breedte}&longitude={lengte}&timezone=Europe/Amsterdam"
+            "&current=pm10,pm2_5,nitrogen_dioxide,european_aqi",
+            limiet=20,
+        )
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    nu = (gegevens or {}).get("current") or {}
+    pm10, pm25, no2 = nu.get("pm10"), nu.get("pm2_5"), nu.get("nitrogen_dioxide")
+    if not any(isinstance(stuk, (int, float)) for stuk in (pm10, pm25, no2)):
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen meetwaarden ontvangen"}
+    index = nu.get("european_aqi")
+    oordeel = ""
+    if isinstance(index, (int, float)):
+        oordeel = "extreem slecht"
+        for grens, woord in LUCHTKWALITEIT:
+            if index < grens:
+                oordeel = woord
+                break
+    tekst = f"In {nette} staan de fijnstofmetingen van nu: PM2,5 {_getal(pm25, ' µg/m³')}, " \
+            f"PM10 {_getal(pm10, ' µg/m³')} en stikstofdioxide {_getal(no2, ' µg/m³')}."
+    if isinstance(index, (int, float)):
+        tekst += f" De Europese luchtkwaliteitsindex staat op {_getal(index, komma=False)} ({oordeel})."
+    if isinstance(pm25, (int, float)) and pm25 > 25:
+        tekst += " Dat is aan de hoge kant; fijnstof komt vooral van verkeer, houtstook en industrie."
+    tekst += " De waarden gelden voor een punt in de buurt van de opgegeven plaats, niet voor elke straat."
+    return {"naam": naam, "bron": bron, "tekst": tekst}
+
+
+def gereedschap_poollicht(argument: str) -> dict:
+    """De Kp-index en of noorderlicht boven Nederland te zien kan zijn (NOAA SWPC)."""
+    naam, bron = "poollicht", "services.swpc.noaa.gov (NOAA)"
+    try:
+        reeks = _haal_json(
+            "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json", limiet=20)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    rijen = [rij for rij in (reeks or [])
+             if isinstance(rij, dict) and isinstance(rij.get("Kp"), (int, float))]
+    if not rijen:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen Kp-waarden ontvangen"}
+    nu = rijen[-1]
+    kp = float(nu["Kp"])
+    laatste = [float(rij["Kp"]) for rij in rijen[-8:]]
+    top = max(laatste)
+    tekst = (f"De Kp-index is nu {_getal(kp)} "
+             f"(gemeten {str(nu.get('time_tag') or '')[:16].replace('T', ' ')} UTC). "
+             f"In de laatste 24 uur kwam hij niet boven {_getal(top)}.")
+    try:
+        vooruit = _haal_json(
+            "https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json",
+            limiet=20)
+        nog = [float(rij["kp"]) for rij in (vooruit or [])
+               if isinstance(rij, dict) and str(rij.get("observed") or "") == "predicted"
+               and isinstance(rij.get("kp"), (int, float))]
+        if nog:
+            tekst += f" In de verwachting loopt de Kp de komende uren op tot {_getal(max(nog[:8]))}."
+    except Exception:
+        pass
+    if top >= 7:
+        tekst += (" Bij zo'n hoge Kp is noorderlicht in heel Nederland kansrijk, als het donker en "
+                  "helder is; kijk naar het noorden, weg van stadslicht.")
+    elif top >= 5:
+        tekst += (" Bij Kp 5 of hoger is noorderlicht soms boven Nederland te zien: aan de "
+                  "noordelijke horizon, buiten de stadslichten en met een heldere lucht.")
+    else:
+        tekst += (" Voor noorderlicht boven Nederland is meestal minstens Kp 5 nodig; nu is het "
+                  "rustig rond de aarde.")
+    return {"naam": naam, "bron": bron, "tekst": tekst}
+
+
+def gereedschap_ruimteweer(argument: str) -> dict:
+    """Zonnewind, magneetveld en zonnevlekken (NOAA SWPC)."""
+    naam, bron = "ruimteweer", "services.swpc.noaa.gov (NOAA)"
+    regels = []
+    try:
+        eerste = (_haal_json(
+            "https://services.swpc.noaa.gov/products/summary/solar-wind-speed.json",
+            limiet=20) or [{}])[0]
+        if isinstance(eerste.get("proton_speed"), (int, float)):
+            regels.append(f"de zonnewind waait met {_getal(eerste.get('proton_speed'), ' km/s', komma=False)}")
+    except Exception:
+        pass
+    try:
+        eerste = (_haal_json(
+            "https://services.swpc.noaa.gov/products/summary/solar-wind-mag-field.json",
+            limiet=20) or [{}])[0]
+        stukken = []
+        if isinstance(eerste.get("bt"), (int, float)):
+            stukken.append(f"sterkte {_getal(eerste.get('bt'), ' nT', komma=False)}")
+        if isinstance(eerste.get("bz_gsm"), (int, float)):
+            stukken.append(f"Bz {_getal(eerste.get('bz_gsm'), ' nT', komma=False)}")
+        if stukken:
+            regels.append("het magneetveld bij de aarde meet " + " en ".join(stukken))
+    except Exception:
+        pass
+    try:
+        vlekken = _haal_json("https://services.swpc.noaa.gov/json/solar_regions.json", limiet=25)
+        rijen = [rij for rij in (vlekken or []) if isinstance(rij, dict)]
+        if rijen:
+            nieuwste = max(str(rij.get("observed_date") or "") for rij in rijen)
+            vandaag = [rij for rij in rijen if str(rij.get("observed_date") or "") == nieuwste]
+            spots = sum(int(rij.get("number_spots") or 0) for rij in vandaag)
+            regels.append(f"op de zon staan {spots} zonnevlekken in {len(vandaag)} gebieden "
+                          f"(gemeten {nieuwste})")
+    except Exception:
+        pass
+    if not regels:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": "de meetdiensten van NOAA gaven geen ruimteweergegevens terug"}
+    return {"naam": naam, "bron": bron, "tekst":
+            "Ruimteweer van nu: " + "; ".join(regels) + ". "
+            "Zonnewind en zonnevlekken zeggen iets over het poollicht en over storingen in "
+            "satellietnavigatie: veel vlekken betekent meer kans op uitbarstingen."}
+
+
+def gereedschap_issplaats(argument: str) -> dict:
+    """Waar het ruimtestation nu hangt (baanberekening via api.wheretheiss.at)."""
+    naam, bron = "iss", "api.wheretheiss.at (baanberekening)"
+    try:
+        gegevens = _haal_json("https://api.wheretheiss.at/v1/satellites/25544", limiet=20)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    lat, lon = (gegevens or {}).get("latitude"), (gegevens or {}).get("longitude")
+    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen positie ontvangen"}
+    noord = "noorderbreedte" if lat >= 0 else "zuiderbreedte"
+    oost = "oosterlengte" if lon >= 0 else "westerlengte"
+    tekst = f"Het ISS hangt nu boven {_getal(abs(lat))}° {noord}, {_getal(abs(lon))}° {oost}"
+    if isinstance(gegevens.get("altitude"), (int, float)):
+        tekst += f", op {_getal(gegevens.get('altitude'), ' km', komma=False)} hoogte"
+    if isinstance(gegevens.get("velocity"), (int, float)):
+        tekst += f", met {_getal(gegevens.get('velocity'), ' km/u', komma=False)}"
+    zicht = {"daylight": "het vliegt nu in het zonlicht",
+             "eclipsed": "het vliegt nu in de schaduw van de aarde"}.get(
+        str(gegevens.get("visibility") or ""), "")
+    tekst += f". {zicht.capitalize() + '.' if zicht else ''}"
+    tekst += (" Of het bij jou overkomt, hangt af van je woonplaats en het tijdstip: er is geen "
+              "gratis bron zonder sleutel die overkomsttijden per plaats uitrekent. NASA doet dat "
+              "wel op https://spotthestation.nasa.gov/tracking_map.cfm.")
+    return {"naam": naam, "bron": bron, "tekst": tekst}
+
+
+def gereedschap_maanopkomst(plaats: str) -> dict:
+    """Hoe laat de maan opkomt en ondergaat (Met.no)."""
+    naam, bron = "maanopkomst", "api.met.no (MET Norway)"
+    try:
+        breedte, lengte, nette = _weer_plaats(plaats, bron)
+        gegevens = _haal_json(
+            "https://api.met.no/weatherapi/sunrise/3.0/moon?"
+            f"lat={breedte}&lon={lengte}&date={datetime.date.today().isoformat()}"
+            f"&offset={urllib.parse.quote(_lokale_tijdzone())}",
+            limiet=20,
+        )
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    eigenschappen = (gegevens or {}).get("properties") or {}
+
+    def _tijd(stuk: object) -> str:
+        moment = str((stuk or {}).get("time") or "")
+        return moment[11:16] if len(moment) >= 16 else ""
+
+    opkomst = _tijd(eigenschappen.get("moonrise"))
+    ondergang = _tijd(eigenschappen.get("moonset"))
+    if not opkomst and not ondergang:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": f"voor {nette} gaf de dienst geen maanopkomst of maanondergang"}
+    tekst = f"Voor {nette}: "
+    tekst += f"de maan komt op om {opkomst}" if opkomst else "de maan komt vandaag niet op"
+    if ondergang:
+        tekst += f" en gaat onder om {ondergang}"
+    tekst += f" (plaatselijke tijd, {_lokale_tijdzone().replace(':', ':')})."
+    fase = eigenschappen.get("moonphase")
+    if isinstance(fase, (int, float)):
+        tekst += f" De maan is voor {_getal(fase, '%')} verlicht."
+    hoog = eigenschappen.get("high_moon") or {}
+    if isinstance(hoog.get("disc_centre_elevation"), (int, float)):
+        tekst += (f" Het hoogste punt staat om {_tijd(hoog)} op "
+                  f"{_getal(hoog.get('disc_centre_elevation'), '°')} boven de horizon.")
+    if eigenschappen.get("moonrise") and eigenschappen.get("moonset"):
+        tekst += " Bij mist of zware bewolking zie je de maan niet, ook al staat hij boven de horizon."
+    return {"naam": naam, "bron": bron, "tekst": tekst}
+
+
+def gereedschap_rivierafvoer(rivier: str) -> dict:
+    """Hoeveel water de Rijn en de Maas afvoeren (Rijkswaterstaat)."""
+    naam, bron = "rivierafvoer", "rijkswaterstaat.nl (WaterWebServices)"
+    gewenst = (rivier or "").strip().lower()
+    punten = [punt for punt in RIVIER_PUNTEN if punt[0] in gewenst] or list(RIVIER_PUNTEN)
+    nu = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=1)))
+    regels = []
+    for _, code, omschrijving in punten:
+        vraag = {
+            "Locatie": {"Code": code},
+            "AquoPlusWaarnemingMetadata": {
+                "AquoMetadata": {"Compartiment": {"Code": "OW"}, "Grootheid": {"Code": "Q"},
+                                 "Hoedanigheid": {"Code": "NVT"}},
+                "KwaliteitswaardeCode": "NVT"},
+            "Periode": {
+                "Begindatumtijd": (nu - datetime.timedelta(hours=14)).strftime("%Y-%m-%dT%H:%M:%S.000+01:00"),
+                "Einddatumtijd": nu.strftime("%Y-%m-%dT%H:%M:%S.000+01:00")},
+        }
+        try:
+            antwoord = _haal_json(
+                RIVIER_WWS,
+                gegevens=json.dumps(vraag).encode("utf-8"),
+                koppen={"Content-Type": "application/json"},
+                limiet=20,
+            )
+        except Exception:
+            continue
+        metingen = []
+        for lijst in (antwoord or {}).get("WaarnemingenLijst") or []:
+            for meting in lijst.get("MetingenLijst") or []:
+                waarde = (meting.get("Meetwaarde") or {}).get("Waarde_Numeriek")
+                if isinstance(waarde, (int, float)):
+                    metingen.append((str(meting.get("Tijdstip") or "")[11:16], float(waarde)))
+        if not metingen:
+            continue
+        laatste = metingen[-1]
+        stuk = f"{omschrijving} voert {_getal(laatste[1], ' m³/s', komma=False)} af (laatste meting {laatste[0]})"
+        if len(metingen) >= 70:
+            eerder = metingen[-72][1] if len(metingen) >= 72 else metingen[0][1]
+            richting = "iets meer" if laatste[1] > eerder else "iets minder" if laatste[1] < eerder else "gelijk"
+            stuk += (f"; een etmaal eerder was dat {_getal(eerder, ' m³/s', komma=False)}, "
+                     f"dus {richting}")
+        regels.append(stuk)
+    if not regels:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": "Rijkswaterstaat gaf geen debietmetingen terug voor de Rijn en de Maas"}
+    return {"naam": naam, "bron": bron, "tekst": "Debiet (afvoer) van de grote rivieren: "
+            + "; ".join(regels) + "."}
+
+
+def gereedschap_bodemvocht(plaats: str) -> dict:
+    """Hoe nat de bodem is, voor tuin en landbouw (Open-Meteo)."""
+    naam, bron = "bodemvocht", "open-meteo.com"
+    try:
+        breedte, lengte, nette = _weer_plaats(plaats, bron)
+        gegevens = _haal_json(
+            "https://api.open-meteo.com/v1/forecast?"
+            f"latitude={breedte}&longitude={lengte}&timezone=Europe/Amsterdam"
+            "&current=soil_moisture_0_to_7cm,soil_temperature_0cm"
+            "&hourly=soil_moisture_0_to_7cm&forecast_days=1",
+            limiet=20,
+        )
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    nu = (gegevens or {}).get("current") or {}
+    vocht = nu.get("soil_moisture_0_to_7cm")
+    if not isinstance(vocht, (int, float)):
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen bodemvocht ontvangen"}
+    tekst = (f"In {nette} zit in de bovenste 7 cm van de bodem {_getal(vocht, ' m³ water per m³')} "
+             f"(dat is {_getal(vocht * 100, '%')} van het volume)")
+    if isinstance(nu.get("soil_temperature_0cm"), (int, float)):
+        tekst += f", bij een bodemtemperatuur van {_getal(nu.get('soil_temperature_0cm'), ' °C')}"
+    tekst += "."
+    if vocht >= 0.35:
+        tekst += " Dat is nat: de grond houdt veel water vast."
+    elif vocht <= 0.20:
+        tekst += " Dat is droog: de grond kan wel water gebruiken."
+    else:
+        tekst += " Dat is een normale vochtigheid voor de grond."
+    uren = _komende_uren((gegevens or {}).get("hourly") or {}, ["soil_moisture_0_to_7cm"], 6, 2)
+    regels = [f"{tijd} {_getal(stuk[0] * 100, '%')}" for tijd, stuk in uren
+              if isinstance(stuk[0], (int, float))]
+    if regels:
+        tekst += " De komende uren: " + ", ".join(regels) + "."
+    return {"naam": naam, "bron": bron + " (bodemvocht)", "tekst": tekst}
+
+
+def gereedschap_graaddagen(plaats: str) -> dict:
+    """Hoe koud het stookseizoen tot nu toe was, in graaddagen (Open-Meteo archief)."""
+    naam, bron = "graaddagen", "open-meteo.com (archief)"
+    try:
+        breedte, lengte, nette = _weer_plaats(plaats, bron)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    vandaag = datetime.date.today()
+    begin = datetime.date(vandaag.year, 1, 1)
+    eind = vandaag - datetime.timedelta(days=5)
+    if eind <= begin:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": "het archief heeft dit jaar nog geen volledige dagen"}
+    try:
+        gegevens = _haal_json(
+            "https://archive-api.open-meteo.com/v1/archive?"
+            f"latitude={breedte}&longitude={lengte}&start_date={begin.isoformat()}"
+            f"&end_date={eind.isoformat()}&daily=temperature_2m_mean&timezone=Europe/Amsterdam",
+            limiet=25,
+        )
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    dagen = [waarde for waarde in (((gegevens or {}).get("daily") or {}).get("temperature_2m_mean") or [])
+             if isinstance(waarde, (int, float))]
+    if not dagen:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": f"geen etmaaltemperaturen voor {nette}"}
+    graaddagen = sum(max(0.0, 18.0 - waarde) for waarde in dagen)
+    gemiddelde = sum(dagen) / len(dagen)
+    koudste = min(dagen)
+    return {"naam": naam, "bron": bron, "tekst":
+            f"In {nette} waren er dit jaar tot en met {eind.strftime('%d-%m-%Y')} "
+            f"{_getal(graaddagen, komma=False)} graaddagen (drempel 18 °C), over {len(dagen)} dagen. "
+            f"De etmaaltemperatuur was gemiddeld {_getal(gemiddelde, ' °C')}; de koudste dag kwam op "
+            f"{_getal(koudste, ' °C')}. Eén graaddag is één graad dat een etmaal onder de 18 °C blijft; "
+            "hoe meer graaddagen, hoe meer er gestookt moest worden."}
+
+
+def gereedschap_zonuren(plaats: str) -> dict:
+    """Hoeveel uur de zon al scheen (Open-Meteo)."""
+    naam, bron = "zonuren", "open-meteo.com"
+    try:
+        breedte, lengte, nette = _weer_plaats(plaats, bron)
+        gegevens = _haal_json(
+            "https://api.open-meteo.com/v1/forecast?"
+            f"latitude={breedte}&longitude={lengte}&timezone=Europe/Amsterdam"
+            "&daily=sunshine_duration&past_days=6&forecast_days=1",
+            limiet=20,
+        )
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    dagen = (gegevens or {}).get("daily") or {}
+    datums, reeks = dagen.get("time") or [], dagen.get("sunshine_duration") or []
+    punten = [(str(datums[plek])[:10], stuk / 3600.0) for plek, stuk in enumerate(reeks)
+              if isinstance(stuk, (int, float))]
+    if not punten:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen zonneduur ontvangen"}
+    vandaag = datetime.date.today().isoformat()
+    nu_vandaag = [stuk for dag, stuk in punten if dag == vandaag]
+    tekst = (f"In {nette} scheen de zon vandaag tot nu toe {_getal(nu_vandaag[0], ' uur')}."
+             if nu_vandaag else f"In {nette} is er vandaag nog geen zonneschijn gemeten.")
+    gisteren = [stuk for dag, stuk in punten if dag == (datetime.date.today()
+                                                        - datetime.timedelta(days=1)).isoformat()]
+    if gisteren:
+        tekst += f" Gisteren was dat {_getal(gisteren[0], ' uur')}."
+    totaal = sum(stuk for _, stuk in punten)
+    tekst += (f" Over de laatste {len(punten)} dagen komt dat op {_getal(totaal, ' uur')} zon, "
+              f"gemiddeld {_getal(totaal / len(punten), ' uur per dag')}.")
+    beste = max(punten, key=lambda paar: paar[1])
+    tekst += f" De zonnigste dag in die reeks was {beste[0][8:10]}-{beste[0][5:7]} met {_getal(beste[1], ' uur')}."
+    return {"naam": naam, "bron": bron + " (zonneschijnduur)", "tekst": tekst}
+
+
+# ---- verkeer en vervoer ----------------------------------------------------
+
+
+def gereedschap_kenteken(verzoek: str) -> dict:
+    """Merk, model, bouwjaar en APK-datum bij een kenteken (RDW open data)."""
+    naam, bron = "kenteken", "opendata.rdw.nl (RDW)"
+    kenteken = _kenteken_uit(verzoek)
+    if not kenteken:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen kenteken in de vraag gevonden"}
+    adres = f"https://opendata.rdw.nl/resource/m9d7-ebf2.json?kenteken={urllib.parse.quote(kenteken)}"
+    try:
+        rijen = _haal_json(adres, limiet=20)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    if not isinstance(rijen, list) or not rijen:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": (f"het kenteken {kenteken} staat niet in de open data van de RDW; "
+                         "controleer de letters en cijfers (alleen Nederlandse kentekens staan erin)")}
+    voertuig = rijen[0]
+    soort = str(voertuig.get("voertuigsoort") or "voertuig")
+    merk = str(voertuig.get("merk") or "").title().strip()
+    model = str(voertuig.get("handelsbenaming") or "").title().strip()
+    stukken = []
+    if merk or model:
+        stukken.append(f"{merk} {model}".strip())
+    toelating = _datum_nl(voertuig.get("datum_eerste_toelating"))
+    if toelating:
+        jaar = toelating[-4:]
+        stukken.append(f"bouwjaar {jaar} (eerste toelating {toelating})")
+    if str(voertuig.get("eerste_kleur") or "").strip() not in ("", "N.v.t.", "Niet geregistreerd"):
+        stukken.append(f"kleur {str(voertuig.get('eerste_kleur')).lower()}")
+    if isinstance(voertuig.get("cilinderinhoud"), str) and str(voertuig.get("cilinderinhoud")).isdigit():
+        stukken.append(f"{voertuig.get('cilinderinhoud')} cc")
+    apk = _datum_nl(voertuig.get("vervaldatum_apk"))
+    if apk:
+        stukken.append(f"APK tot {apk}")
+    try:
+        brandstoffen = _haal_json(
+            "https://opendata.rdw.nl/resource/8ys7-d773.json?"
+            f"kenteken={urllib.parse.quote(kenteken)}", limiet=20)
+        namen = []
+        for rij in brandstoffen or []:
+            stuk = str(rij.get("brandstof_omschrijving") or "").lower()
+            if stuk and stuk not in namen:
+                namen.append(stuk)
+        if namen:
+            stukken.append("brandstof " + " en ".join(namen))
+    except Exception:
+        pass
+    return {"naam": naam, "bron": bron, "tekst":
+            f"Kenteken {kenteken} ({soort}): " + ", ".join(stukken) + "."}
+
+
+def gereedschap_apk(verzoek: str) -> dict:
+    """Wanneer de APK van een kenteken verloopt (RDW open data)."""
+    naam, bron = "apk", "opendata.rdw.nl (RDW)"
+    kenteken = _kenteken_uit(verzoek)
+    if not kenteken:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen kenteken in de vraag gevonden"}
+    datum = ""
+    try:
+        keuringen = _haal_json(
+            "https://opendata.rdw.nl/resource/vkij-7mwc.json?"
+            f"kenteken={urllib.parse.quote(kenteken)}", limiet=20)
+        for rij in keuringen or []:
+            gevonden = _datum_nl(rij.get("vervaldatum_keuring"))
+            if gevonden and (not datum or _dagen_tot(gevonden) > _dagen_tot(datum)):
+                datum = gevonden
+    except Exception:
+        datum = ""
+    if not datum:
+        try:
+            voertuigen = _haal_json(
+                "https://opendata.rdw.nl/resource/m9d7-ebf2.json?"
+                f"kenteken={urllib.parse.quote(kenteken)}", limiet=20)
+            if voertuigen:
+                datum = _datum_nl(voertuigen[0].get("vervaldatum_apk"))
+        except Exception as fout:
+            return {"naam": naam, "bron": bron, "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    if not datum:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": (f"voor {kenteken} staat geen keuringsdatum in de open data; "
+                         "controleer het kenteken of het voertuig is nog nooit in Nederland gekeurd")}
+    dagen = _dagen_tot(datum)
+    if dagen < 0:
+        tekst = (f"De APK van {kenteken} is verlopen op {datum}; dat is {-dagen} dagen geleden. "
+                 "Laat de auto zo snel mogelijk keuren.")
+    elif dagen == 0:
+        tekst = f"De APK van {kenteken} verloopt vandaag ({datum})."
+    else:
+        tekst = (f"De APK van {kenteken} verloopt op {datum}; dat is over {dagen} dagen.")
+        if dagen <= 30:
+            tekst += " Tijd om een afspraak te maken."
+    return {"naam": naam, "bron": bron, "tekst": tekst}
+
+
+def gereedschap_brandstofverbruik(verzoek: str) -> dict:
+    """Brandstofsoort en emissieklasse bij een kenteken (RDW open data)."""
+    naam, bron = "brandstofverbruik", "opendata.rdw.nl (RDW)"
+    kenteken = _kenteken_uit(verzoek)
+    if not kenteken:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen kenteken in de vraag gevonden"}
+    try:
+        rijen = _haal_json(
+            "https://opendata.rdw.nl/resource/8ys7-d773.json?"
+            f"kenteken={urllib.parse.quote(kenteken)}", limiet=20)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    if not isinstance(rijen, list) or not rijen:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": (f"bij kenteken {kenteken} staan geen brandstofgegevens in de open data; "
+                         "controleer het kenteken")}
+    regels = []
+    for rij in rijen:
+        stukken = []
+        if rij.get("brandstof_omschrijving"):
+            stukken.append(str(rij["brandstof_omschrijving"]).lower())
+        if rij.get("uitlaatemissieniveau"):
+            stukken.append(str(rij["uitlaatemissieniveau"]))
+        if rij.get("emissiecode_omschrijving") not in (None, "", "0"):
+            stukken.append(f"emissiecode {rij.get('emissiecode_omschrijving')}")
+        if stukken:
+            regels.append(f"motor {rij.get('brandstof_volgnummer') or '?'}: " + ", ".join(stukken))
+    if not regels:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": f"de gegevens van {kenteken} bevatten geen leesbare brandstofgegevens"}
+    return {"naam": naam, "bron": bron, "tekst":
+            f"Kenteken {kenteken} rijdt op: " + "; ".join(regels) + ". "
+            "Let op: het verbruik in liters per 100 km en de CO2-uitstoot geeft de RDW niet vrij in "
+            "deze open data; die staan in het kentekenregister en op het kentekenbewijs."}
+
+
+def gereedschap_terugroepacties(verzoek: str) -> dict:
+    """Openstaande terugroepacties bij een kenteken (RDW open data)."""
+    naam, bron = "terugroepacties", "opendata.rdw.nl (RDW)"
+    kenteken = _kenteken_uit(verzoek)
+    if not kenteken:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen kenteken in de vraag gevonden"}
+    try:
+        statussen = _haal_json(
+            "https://opendata.rdw.nl/resource/t49b-isb7.json?"
+            f"kenteken={urllib.parse.quote(kenteken)}", limiet=20)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    if not statussen:
+        indicator = ""
+        try:
+            voertuigen = _haal_json(
+                "https://opendata.rdw.nl/resource/m9d7-ebf2.json?"
+                f"kenteken={urllib.parse.quote(kenteken)}", limiet=20)
+            if not voertuigen:
+                return {"naam": naam, "bron": bron, "tekst": "",
+                        "fout": f"het kenteken {kenteken} staat niet in de open data van de RDW"}
+            indicator = str(voertuigen[0].get("openstaande_terugroepactie_indicator") or "")
+        except Exception:
+            indicator = ""
+        if indicator.lower().startswith("nee"):
+            return {"naam": naam, "bron": bron, "tekst":
+                    f"Voor kenteken {kenteken} staat geen openstaande terugroepactie geregistreerd."}
+        return {"naam": naam, "bron": bron, "tekst":
+                f"Voor kenteken {kenteken} staan geen losse terugroepacties geregistreerd"
+                + (f" (het voertuig staat in de RDW als '{indicator}')" if indicator else "") + "."}
+    regels = []
+    for rij in statussen[:5]:
+        stuk = str(rij.get("referentiecode_rdw") or "?")
+        status = str(rij.get("status") or "")
+        if status:
+            stuk += f" ({status.lower()})"
+        referentie = str(rij.get("referentiecode_rdw") or "")
+        if referentie:
+            try:
+                acties = _haal_json(
+                    "https://opendata.rdw.nl/resource/j9yg-7rg9.json?"
+                    f"referentiecode_rdw={urllib.parse.quote(referentie)}&$select=omschrijving_defect",
+                    limiet=15)
+                if acties and acties[0].get("omschrijving_defect"):
+                    stuk += ": " + _kort(_schoon(str(acties[0]["omschrijving_defect"])), 110)
+            except Exception:
+                pass
+        regels.append(stuk)
+    return {"naam": naam, "bron": bron, "tekst":
+            f"Terugroepacties voor kenteken {kenteken} ({len(statussen)} gevonden): "
+            + " | ".join(regels) + "."}
+
+
+def gereedschap_files_nu(verzoek: str) -> dict:
+    """Waar het nu vastloopt op de snelweg, met filelengte en vertraging (NDW/Rijkswaterstaat)."""
+    naam, bron = "files nu", "opendata.ndw.nu (NDW / Rijkswaterstaat)"
+    try:
+        ruw = _ndw_ruw()
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    gezocht = _weg_uit(verzoek or "")
+    soortnamen = {"stationaryTraffic": "stilstaand verkeer",
+                  "slowTraffic": "langzaam rijdend verkeer",
+                  "queuingTraffic": "langzaam rijdend tot stilstaand verkeer"}
+    files = []
+    for blok in re.findall(r"<sit:situationRecord\b.*?</sit:situationRecord>", ruw, re.S):
+        if "abnormalTrafficType" not in blok and "sit:AbnormalTraffic" not in blok:
+            continue
+        punt = re.search(r"<loc:posList>([\d.\- ]+)</loc:posList>", blok)
+        if not punt:
+            continue
+        eerste = punt.group(1).split()
+        try:
+            breedte, lengte = float(eerste[0]), float(eerste[1])
+        except (IndexError, ValueError):
+            continue
+        filelengte = re.search(r"<sit:queueLength>([\d.]+)", blok)
+        vertraging = re.search(r"<sit:delayTimeValue>([\d.]+)", blok)
+        soort = re.search(r"<sit:abnormalTrafficType>([^<]+)", blok)
+        files.append({"breedte": breedte, "lengte": lengte,
+                      "meters": float(filelengte.group(1)) if filelengte else 0.0,
+                      "minuten": (float(vertraging.group(1)) / 60.0) if vertraging else 0.0,
+                      "soort": soortnamen.get(soort.group(1) if soort else "", "file")})
+    if gezocht:
+        gekozen = []
+        for stuk in files:
+            waar = _plek_tekst(stuk["breedte"], stuk["lengte"])
+            if re.search(rf"(?<![A-Z0-9]){re.escape(gezocht)}(?![0-9])", waar.upper()):
+                stuk["waar"] = waar
+                gekozen.append(stuk)
+        files = gekozen
+    if not files:
+        return {"naam": naam, "bron": bron, "tekst":
+                f"Er staan nu geen files in het actuele verkeersbeeld"
+                f"{' op ' + gezocht if gezocht else ''}."}
+    files.sort(key=lambda stuk: -stuk["meters"])
+    regels = []
+    for stuk in files[:6]:
+        waar = stuk.get("waar") or _plek_tekst(stuk["breedte"], stuk["lengte"])
+        stuk_tekst = f"{waar}: {_getal(stuk['meters'] / 1000, ' km')} {stuk['soort']}"
+        if stuk["minuten"] >= 1:
+            stuk_tekst += f", vertraging ongeveer {_getal(stuk['minuten'], ' minuten', komma=False)}"
+        regels.append(stuk_tekst)
+    return {"naam": naam, "bron": bron, "tekst":
+            f"Actuele files ({len(files)} in het beeld): " + " | ".join(regels) + "."}
+
+
+def gereedschap_ns_verstoringen(argument: str) -> dict:
+    """Storingen en werkzaamheden op het spoor, uit het nieuws (Google Nieuws)."""
+    naam, bron = "ns verstoringen", "Google Nieuws (ns.nl en landelijke media)"
+    titels = _nieuwsfeed("NS storing trein", "ns", 6)
+    werk = _nieuwsfeed("werkzaamheden spoor trein", "ns", 4)
+    if not titels and not werk:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": "er kwam even geen nieuws over het spoor terug bij de nieuwsfeed"}
+    tekst = ""
+    if titels:
+        tekst += "Storingen en vertragingen op het spoor: " + " | ".join(titels) + ". "
+    if werk:
+        tekst += "Gepland onderhoud: " + " | ".join(werk) + ". "
+    tekst += ("Voor de actuele situatie per traject en per trein is de reisplanner van NS zelf "
+              "de bron (https://www.ns.nl/reisplanner); het nieuws loopt daar vaak op achter.")
+    return {"naam": naam, "bron": bron, "tekst": tekst}
+
+
+def gereedschap_halte(plaats: str) -> dict:
+    """Welke bushalte het dichtst in de buurt is, met de lijnen (OpenStreetMap)."""
+    naam, bron = "halte", "openstreetmap.org (Overpass, ODbL)"
+    if not ((plaats or "").strip() or GEREEDSCHAP_PLAATS):
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen plaats opgegeven"}
+    try:
+        plekken, nette = _osm_nabij(plaats or GEREEDSCHAP_PLAATS, '"highway"="bus_stop"', 1500, 12)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    if not plekken:
+        return {"naam": naam, "bron": bron, "tekst":
+                f"Geen bushaltes gevonden binnen 1,5 km van {nette}."}
+    regels = []
+    for afstand, _naam, kenmerken in plekken[:6]:
+        stuk = (str(kenmerken.get("name") or kenmerken.get("operator")
+                    or kenmerken.get("ref") or "bushalte"))
+        lijnen = str(kenmerken.get("route_ref") or kenmerken.get("lines") or "").strip()
+        if lijnen:
+            stuk += f" (lijnen {lijnen})"
+        regels.append(f"{stuk} op {_getal(afstand, ' km')}")
+    return {"naam": naam, "bron": bron, "tekst":
+            f"Bushaltes bij {nette}: " + "; ".join(regels)
+            + ". Welke lijnen er precies rijden staat alleen bij haltes waar iemand dat invulde."}
+
+
+def gereedschap_verkeersboetes(verzoek: str) -> dict:
+    """Wat een overtreding kost. De tarievenpagina van het OM antwoordt niet meer."""
+    naam, bron = "verkeersboetes", "Openbaar Ministerie / CJIB"
+    bereikbaar = True
+    try:
+        _haal("https://www.om.nl/onderwerpen/verkeersboetes/boetebedragen", limiet=15)
+    except Exception:
+        bereikbaar = False
+    if bereikbaar:
+        tekst = ("De boetebedragen staan bij het Openbaar Ministerie "
+                 "(https://www.om.nl/onderwerpen/verkeersboetes). Dit gereedschap leest de "
+                 "bedragen niet uit die pagina; opzoeken in de lijst zelf is het betrouwbaarst.")
+    else:
+        tekst = ("De pagina met boetebedragen van het Openbaar Ministerie antwoordt niet meer, "
+                 "dus hier staan geen bedragen. Kijk in de boetebase van het OM "
+                 "(https://www.om.nl/onderwerpen/verkeersboetes) of bij het CJIB "
+                 "(https://www.cjib.nl/) voor het actuele tarief. Dit gereedschap verzint geen bedragen.")
+    gewenst = (verzoek or "").strip()
+    if gewenst:
+        tekst += f" Gevraagd: {_kort(_schoon(gewenst), 80)}."
+    return {"naam": naam, "bron": bron, "tekst": tekst}
+
+
+def gereedschap_vliegtuig(verzoek: str) -> dict:
+    """Welk toestel bij een registratie of Mode-S-code hoort (adsbdb.com, hexdb.io)."""
+    naam, bron = "vliegtuig", "adsbdb.com en hexdb.io"
+    code, soort = _toestel_uit(verzoek)
+    if not code:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": "geen registratie (zoals PH-BXA) of Mode-S-code (zes hextekens) in de vraag gevonden"}
+    gegevens = None
+    try:
+        antwoord = _haal_json(
+            f"https://api.adsbdb.com/v0/aircraft/{urllib.parse.quote(code)}", limiet=20)
+        gegevens = ((antwoord or {}).get("response") or {}).get("aircraft") or None
+    except Exception:
+        gegevens = None
+    if not gegevens and soort == "hex":
+        try:
+            gegevens = _haal_json(
+                f"https://hexdb.io/api/v1/aircraft/{urllib.parse.quote(code)}", limiet=20)
+        except Exception:
+            gegevens = None
+    if not gegevens:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": (f"geen toestel gevonden bij '{code}'. De gratis databases werken met de "
+                         "Mode-S-code van zes hextekens (bijvoorbeeld 484123); die vind je op "
+                         "https://hexdb.io of in de transpondergegevens.")}
+    stukken = []
+    registratie = str(gegevens.get("registration") or "").strip()
+    if registratie:
+        stukken.append(f"registratie {registratie}")
+    toestel = " ".join(stuk for stuk in (str(gegevens.get("manufacturer") or "").strip(),
+                                        str(gegevens.get("type") or "").strip()) if stuk)
+    if toestel:
+        stukken.append(toestel)
+    if gegevens.get("icao_type"):
+        stukken.append(f"type {gegevens.get('icao_type')}")
+    if gegevens.get("mode_s"):
+        stukken.append(f"Mode-S {gegevens.get('mode_s')}")
+    if gegevens.get("registered_owner"):
+        eigenaar = str(gegevens.get("registered_owner"))
+        land = str(gegevens.get("registered_owner_country_name") or "")
+        stukken.append(f"eigenaar {eigenaar}" + (f" ({land})" if land else ""))
+    if not stukken:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": f"de database kent '{code}' wel, maar gaf geen leesbare gegevens terug"}
+    return {"naam": naam, "bron": bron, "tekst": f"{code}: " + ", ".join(stukken) + "."}
+
+
+def gereedschap_schip(verzoek: str) -> dict:
+    """Een MMSI-nummer of een plek: welk schip waar vaart vraagt een AIS-bron met sleutel."""
+    naam, bron = "schip", "openstreetmap.org (Overpass, ODbL)"
+    mmsi = _mmsi_uit(verzoek)
+    if mmsi:
+        vlag = _vlag_uit_mmsi(mmsi)
+        tekst = (f"MMSI {mmsi}" + (f" hoort bij {vlag}" if vlag else "") + ". ")
+        tekst += ("Waar dat schip nu vaart, is niet gratis op te zoeken: AIS-posities komen van "
+                  "diensten met een sleutel of abonnement, zoals https://www.marinetraffic.com of "
+                  "https://www.vesselfinder.com. Dit gereedschap verzint geen positie. De eerste "
+                  "drie cijfers van een MMSI zijn het land van registratie (244, 245 en 246 zijn "
+                  "Nederland).")
+        return {"naam": naam, "bron": "ITU (land bij MMSI)", "tekst": tekst}
+    if not ((verzoek or "").strip() or GEREEDSCHAP_PLAATS):
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": "noem een MMSI-nummer (negen cijfers) of een plaats"}
+    try:
+        plekken, nette = _osm_nabij(verzoek or GEREEDSCHAP_PLAATS, '"seamark:type"', 3000, 12)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    if not plekken:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": (f"geen scheepvaartgegevens gevonden bij '{_kort(_schoon(verzoek), 40)}'; "
+                         "voor het volgen van een schip op MMSI is een AIS-bron met sleutel nodig")}
+    regels = []
+    for afstand, _naam, kenmerken in plekken[:6]:
+        stuk = (str(kenmerken.get("name") or kenmerken.get("seamark:name")
+                    or kenmerken.get("seamark:type") or "vaarwaterobject"))
+        regels.append(f"{stuk} op {_getal(afstand, ' km')}")
+    return {"naam": naam, "bron": bron, "tekst":
+            f"Vaarwater en scheepvaart bij {nette}: " + "; ".join(regels)
+            + ". Losse schepen op MMSI volgen kan alleen bij een AIS-dienst met sleutel."}
+
+
+def gereedschap_occasions(verzoek: str) -> dict:
+    """Tweedehands auto's met prijs, bouwjaar en kilometerstand (Marktplaats)."""
+    naam, bron = "occasions", "marktplaats.nl"
+    zoek = _omgeving_tekst(verzoek)
+    if not zoek:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": "noem een merk en model, bijvoorbeeld 'occasions volkswagen polo'"}
+    try:
+        gegevens = _haal_json(
+            "https://www.marktplaats.nl/lrp/api/search?"
+            f"query={urllib.parse.quote(zoek)}&limit=8&l1CategoryId=91", limiet=25)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    aanbod = (gegevens or {}).get("listings") or []
+    if not aanbod:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": f"geen occasions gevonden voor '{zoek}'"}
+    regels = []
+    for stuk in aanbod[:6]:
+        prijs = (stuk.get("priceInfo") or {}).get("priceCents")
+        titel = _kort(_schoon(str(stuk.get("title") or "auto")), 60)
+        regel = titel
+        if isinstance(prijs, (int, float)) and prijs > 0:
+            regel += f" — {_getal(prijs / 100, ' euro', komma=False)}"
+        kenmerken = {str(stuk.get("key") or ""): str(stuk.get("value") or "")
+                     for stuk in stuk.get("attributes") or []}
+        extra = [deel for deel in (kenmerken.get("constructionYear"),
+                                   (kenmerken.get("mileage") + " km") if kenmerken.get("mileage") else "",
+                                   kenmerken.get("fuel", "").lower())
+                 if deel]
+        if extra:
+            regel += " (" + ", ".join(extra) + ")"
+        plaats = (stuk.get("location") or {}).get("cityName")
+        if plaats:
+            regel += f" in {plaats}"
+        regels.append(regel)
+    totaal = (gegevens or {}).get("totalResultCount")
+    kop = (f"Occasions voor '{zoek}'" + (f" ({totaal} advertenties)" if isinstance(totaal, int) else ""))
+    return {"naam": naam, "bron": bron, "tekst":
+            kop + ": " + " | ".join(regels) + ". Prijzen en kilometerstanden komen uit de advertentie."}
+
+
+def gereedschap_laadpunten(plaats: str) -> dict:
+    """Laadpalen in de buurt en hoe snel ze laden (OpenStreetMap)."""
+    naam, bron = "laadpunten", "openstreetmap.org (Overpass, ODbL)"
+    if not ((plaats or "").strip() or GEREEDSCHAP_PLAATS):
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen plaats opgegeven"}
+    try:
+        plekken, nette = _osm_nabij(
+            plaats or GEREEDSCHAP_PLAATS, '"amenity"="charging_station"', 1500, 12)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    if not plekken:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": f"geen laadpunten gevonden binnen 1,5 km van {nette}"}
+    sleutels = ("charging_station:output", "socket:type2:output", "socket:ccs:output",
+                "socket:chademo:output", "maxpower", "power", "output")
+    regels = []
+    for afstand, _naam, kenmerken in plekken[:6]:
+        stuk = str(kenmerken.get("name") or kenmerken.get("operator")
+                   or kenmerken.get("brand") or "laadpunt")
+        vermogen = ""
+        for sleutel in sleutels:
+            waarde = str(kenmerken.get(sleutel) or "").strip()
+            if waarde:
+                vermogen = re.sub(r"\s*kW\s*$", " kW", waarde.replace("kW", " kW").strip())
+                break
+        if not vermogen:
+            for sleutel, waarde in kenmerken.items():
+                if "output" in sleutel and str(waarde).strip():
+                    vermogen = str(waarde).replace("kW", " kW").strip()
+                    break
+        aantal = str(kenmerken.get("capacity") or "").strip()
+        delen = [deel for deel in (vermogen, f"{aantal} punten" if aantal else "") if deel]
+        regels.append(f"{stuk} ({', '.join(delen)}) op {_getal(afstand, ' km')}"
+                      if delen else f"{stuk} op {_getal(afstand, ' km')}")
+    return {"naam": naam, "bron": bron, "tekst":
+            f"Laadpunten bij {nette}: " + "; ".join(regels)
+            + ". Het vermogen staat er alleen bij als iemand dat in OpenStreetMap invulde."}
+
+
+def gereedschap_veerboottijden(plaats: str) -> dict:
+    """Welke veerponten er varen; de exacte tijden staan er zelden in (OpenStreetMap)."""
+    naam, bron = "veerboottijden", "openstreetmap.org (Overpass, ODbL)"
+    if not ((plaats or "").strip() or GEREEDSCHAP_PLAATS):
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": "geen plaats opgegeven"}
+    try:
+        plekken, nette = _osm_nabij(plaats or GEREEDSCHAP_PLAATS, '"route"="ferry"', 12000, 10)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": str(fout)}
+    if not plekken:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": f"geen veerponten gevonden binnen 12 km van {nette}"}
+    regels = []
+    for afstand, _naam, kenmerken in plekken[:6]:
+        naam_stuk = str(kenmerken.get("name") or "").strip()
+        van, naar = str(kenmerken.get("from") or "").strip(), str(kenmerken.get("to") or "").strip()
+        if not naam_stuk and (van or naar):
+            naam_stuk = f"veerpont {van or '?'} - {naar or '?'}"
+        if not naam_stuk:
+            naam_stuk = "veerpont"
+        extra = []
+        if kenmerken.get("interval"):
+            extra.append(f"vaart elke {kenmerken.get('interval')}")
+        if kenmerken.get("duration"):
+            extra.append(f"overtocht {kenmerken.get('duration')}")
+        if kenmerken.get("opening_hours"):
+            extra.append(f"vaartijden {kenmerken.get('opening_hours')}")
+        regels.append(f"{naam_stuk} ({', '.join(extra)}) op {_getal(afstand, ' km')}"
+                      if extra else f"{naam_stuk} op {_getal(afstand, ' km')}")
+    return {"naam": naam, "bron": bron, "tekst":
+            f"Veerponten bij {nette}: " + "; ".join(regels)
+            + ". Let op: OpenStreetMap heeft zelden de losse afvaarttijden; die staan bij de "
+            "vervoerder of op het bord bij de pont."}
+
+# ---- L. geld, overheid en recht
+#
+# De gereedschappen voor de groepen 'Geld en zaken' (16) en 'Overheid en recht'
+# (14). Alles sleutelvrij: Yahoo Finance (aandelen, indices, grondstoffen en de
+# TTF-gasprijs), CoinGecko, CBS Open Data, OpenStreetMap, de Tweede Kamer,
+# repository.overheid.nl (SRU van de Kennisgevingendienst), data.overheid.nl,
+# de open data van Nederland Wereldwijd en -- bij de eigen berekeningen -- de
+# tarieven die de Belastingdienst voor 2026 publiceert.
+
+
+def _euro(waarde: object, decimalen: int = 2) -> str:
+    """Een geldbedrag in Nederlandse notatie: 1234.5 -> '1.234,50 euro'."""
+    try:
+        cijfer = float(waarde)
+    except (TypeError, ValueError):
+        return "?"
+    stuk = f"{cijfer:,.{decimalen}f}".replace(",", "~").replace(".", ",").replace("~", ".")
+    return f"{stuk} euro"
+
+
+def _krypto(waarde: float) -> str:
+    """Een cryptobedrag met genoeg decimalen, in Nederlandse notatie."""
+    tekst = f"{waarde:.8f}".rstrip("0").rstrip(".")
+    return (tekst or "0").replace(".", ",")
+
+
+def _pct(waarde: object, decimalen: int = 1, teken: bool = False) -> str:
+    """Een percentage in Nederlandse notatie: 3.7 -> '3,7%' (of '+3,7%')."""
+    try:
+        cijfer = float(waarde)
+    except (TypeError, ValueError):
+        return "?"
+    stuk = f"{cijfer:+.{decimalen}f}" if teken else f"{cijfer:.{decimalen}f}"
+    return (stuk + "%").replace(".", ",")
+
+
+def _schone_groep(naam: str) -> str:
+    """Een CBS-productgroep zonder het cijferblok ervoor: '070000 Vervoer' -> 'Vervoer'."""
+    return re.sub(r"^\d{3,6}\s*", "", (naam or "").strip()).strip() or (naam or "").strip()
+
+
+def _cbs_pagina(adres: str, pagina: int = 4) -> list:
+    """De rijen van één CBS-adres, met de vervolgpagina's erbij."""
+    rijen: list = []
+    for _ in range(pagina):
+        gegevens = _haal_json(adres)
+        if not isinstance(gegevens, dict):
+            break
+        rijen.extend(gegevens.get("value") or [])
+        volgende = gegevens.get("@odata.nextLink")
+        if not volgende:
+            break
+        adres = volgende if str(volgende).startswith("http") else "https://opendata.cbs.nl" + str(volgende)
+    return rijen
+
+
+def _cbs_rijen(tabel: str, filter: str = "", select: str = "", top: int = 400) -> list:
+    """Rijen uit een CBS-tabel via Open Data (zonder sleutel en zonder account)."""
+    adres = f"https://opendata.cbs.nl/ODataApi/odata/{tabel}/TypedDataSet?$top={top}"
+    if filter:
+        adres += "&$filter=" + urllib.parse.quote(filter)
+    if select:
+        adres += "&$select=" + urllib.parse.quote(select, safe=",")
+    return _cbs_pagina(adres)
+
+
+def _cbs_dimensie(tabel: str, dimensie: str, top: int = 1200) -> list:
+    """De waarden van een CBS-dimensie, bijvoorbeeld 'Perioden' of 'RegioS'."""
+    adres = f"https://opendata.cbs.nl/ODataApi/odata/{tabel}/{dimensie}?$top={top}"
+    return _cbs_pagina(adres)
+
+
+def _cpi_laatste() -> tuple:
+    """De nieuwste maand uit de CBS-consumentenprijzen, met de mutaties per groep.
+
+    Geeft (periode, {categorienaam: jaarmutatie}, totale inflatie) terug.
+    """
+    maanden = [rij for rij in _cbs_dimensie("86141NED", "Perioden")]
+    sleutels = sorted(str(rij.get("Key") or "") for rij in maanden if rij.get("Key"))
+    if not sleutels:
+        raise ValueError("geen perioden in de CBS-tabel")
+    periode = sleutels[-1]
+    namen = {}
+    for rij in _cbs_dimensie("86141NED", "Bestedingscategorieen"):
+        namen[str(rij.get("Key") or "").strip()] = _schoon(str(rij.get("Title") or ""))
+    rijen = _cbs_rijen("86141NED", f"Perioden eq '{periode}'",
+                       "Bestedingscategorieen,JaarmutatieCPI_5,Wegingscoefficient_7", 600)
+    groepen = {}
+    totaal = None
+    for rij in rijen:
+        code = str(rij.get("Bestedingscategorieen") or "").strip()
+        mutatie = rij.get("JaarmutatieCPI_5")
+        if code == "T001112":
+            if isinstance(mutatie, (int, float)):
+                totaal = float(mutatie)
+            continue
+        if isinstance(mutatie, (int, float)) and code in namen:
+            groepen[code] = float(mutatie)
+    return periode, groepen, namen, totaal
+
+
+def _beurs(symbool: str, bereik: str = "5d", dividend: bool = False) -> dict:
+    """Koersgegevens van Yahoo Finance voor een aandeel, index of grondstof."""
+    staart = "&events=div" if dividend else ""
+    laatste: Exception | None = None
+    for gastheer in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+        try:
+            gegevens = _haal_json(
+                f"https://{gastheer}/v8/finance/chart/{urllib.parse.quote(symbool)}"
+                f"?range={bereik}&interval=1d{staart}",
+                koppen={"Accept": "application/json"},
+            )
+        except Exception as fout:
+            laatste = fout
+            continue
+        resultaat = ((gegevens or {}).get("chart") or {}).get("result") or []
+        if resultaat:
+            return resultaat[0]
+        laatste = ValueError("Yahoo Finance gaf geen koers terug")
+    raise laatste if laatste else ValueError("geen koersgegevens")
+
+
+def _beurs_regel(symbool: str, naam: str) -> str:
+    """Eén regel met de laatste koers en het verschil in procenten."""
+    gegevens = _beurs(symbool)
+    meta = gegevens.get("meta") or {}
+    prijs = meta.get("regularMarketPrice")
+    if not isinstance(prijs, (int, float)):
+        raise ValueError(f"geen koers voor {naam}")
+    munt = str(meta.get("currency") or "")
+    regel = f"{naam} {_getal(prijs, ' ' + munt if munt else '')}"
+    verandering = meta.get("regularMarketChangePercent")
+    if isinstance(verandering, (int, float)):
+        regel += f" ({_pct(verandering, 2, teken=True)})"
+    return regel
+
+
+def _sru(zoek: str, aantal: int = 8) -> list:
+    """Zoeken in de officiële overheidsrepository (SRU, zonder sleutel).
+
+    Elke treffer is een dict met id, titel, maker en datum.
+    """
+    adres = ("https://repository.overheid.nl/sru?query=" + urllib.parse.quote(zoek)
+             + f"&maximumRecords={max(1, min(aantal, 40))}&httpAccept=application/json")
+    gegevens = _haal_json(adres, limiet=35)
+    antwoord = (gegevens or {}).get("searchRetrieveResponse") or {}
+    records = antwoord.get("records") or []
+    if isinstance(records, dict):
+        records = records.get("record") or []
+    if isinstance(records, dict):
+        records = [records]
+    treffers = []
+    for record in records:
+        try:
+            kern = record["recordData"]["gzd"]["originalData"]["meta"]["owmskern"]
+        except (KeyError, IndexError, TypeError):
+            continue
+        maker = kern.get("creator")
+        if isinstance(maker, dict):
+            maker = maker.get("$") or ""
+        treffers.append({
+            "id": str(kern.get("identifier") or ""),
+            "titel": _schoon(str(kern.get("title") or "")),
+            "maker": _schoon(str(maker or "")),
+            "datum": str(kern.get("modified") or ""),
+        })
+    return treffers
+
+
+def _nww(pad: str) -> str:
+    """Ruwe XML van de open data van Nederland Wereldwijd."""
+    ruw = _haal("https://opendata.nederlandwereldwijd.nl/v2/sources/nederlandwereldwijd" + pad,
+                limiet=25)
+    return ruw.decode("utf-8", "replace")
+
+
+def _nww_land(naam: str) -> str:
+    """De landcode die de open data van Nederland Wereldwijd gebruikt (bijv. 'usa')."""
+    naam = (naam or "").strip().strip(".,!?").lower()
+    if not naam:
+        return ""
+    beste = ""
+    for verspring in (0, 200, 400, 600):
+        try:
+            ruw = _nww(f"/infotypes/countries?rows=200&offset={verspring}")
+        except Exception:
+            break
+        documenten = re.findall(r"<document>(.*?)</document>", ruw, re.S)
+        if not documenten:
+            break
+        for land in documenten:
+            plek = re.search(r"<location>([^<]+)</location>", land)
+            sleutel = re.search(r"<locationkey>([^<]+)</locationkey>", land)
+            code = re.search(r"<isocode>([^<]+)</isocode>", land)
+            if not sleutel:
+                continue
+            kaal = (code.group(1).strip().lower() if code else "") or sleutel.group(1).strip().lower()
+            namen = [(_schoon(plek.group(1)).lower() if plek else ""),
+                     (code.group(1).lower() if code else "")]
+            if naam in namen:
+                return kaal
+            for naamstuk in namen:
+                if naamstuk and (naamstuk.startswith(naam) or naam in naamstuk) and not beste:
+                    beste = kaal
+        if len(documenten) < 200:
+            break
+    return beste or re.sub(r"[^a-z0-9]+", "-", naam).strip("-")
+
+
+def _kamer_pagina(adres: str) -> str:
+    """Een pagina van tweedekamer.nl ophalen en van HTML ontdoen."""
+    ruw = _haal(adres, limiet=25).decode("utf-8", "replace")
+    return re.sub(r"<script.*?</script>|<style.*?</style>", " ", ruw, flags=re.S)
+
+
+def _kamer_tekst(adres: str) -> str:
+    """Alleen de leesbare tekst van een pagina van tweedekamer.nl."""
+    return _schoon(_kamer_pagina(adres))
+
+
+# ---- geld en zaken ---------------------------------------------------------
+
+
+def gereedschap_maandlasten(argument: str) -> dict:
+    """Wat een hypotheek per maand kost, met rente en looptijd (eigen berekening)."""
+    laag = (argument or "").lower().replace(",", ".")
+    rente = 0.0
+    treffer = re.search(r"(\d+(?:\.\d+)?)\s*(?:%|procent|pct)", laag)
+    if treffer:
+        rente = float(treffer.group(1))
+    jaren = 0
+    treffer = re.search(r"(\d{1,2})\s*(?:jaar|jr)\b", laag)
+    if treffer:
+        jaren = int(treffer.group(1))
+    bedrag = 0.0
+    for treffer in re.finditer(r"(\d[\d.]{2,})\s*(?:euro|eur)?", laag):
+        try:
+            waarde = float(treffer.group(1).replace(".", ""))
+        except ValueError:
+            continue
+        if waarde >= 1000 and waarde > bedrag:
+            bedrag = waarde
+    treffer = re.search(r"(\d+(?:\.\d+)?)\s*(miljoen|ton)\b", laag)
+    if treffer and bedrag < 1000:
+        bedrag = float(treffer.group(1)) * (1000000 if treffer.group(2) == "miljoen" else 100000)
+    if bedrag <= 0:
+        return {"naam": "maandlasten", "bron": "de engine zelf", "tekst": "",
+                "fout": "noem een hypotheekbedrag, bijvoorbeeld '300000 euro 4 procent 30 jaar'"}
+    if jaren <= 0:
+        jaren = 30
+    bron_rente = f"de rente die je zelf noemde ({_pct(rente, 1)})"
+    if rente <= 0:
+        rente = 4.4
+        bron_rente = "een aangenomen rente van 4,4%"
+        try:
+            ruw = _haal("https://hypotheekrente.nl/rente/10-jaar-rentevast", limiet=12).decode("utf-8", "replace")
+            treffer = re.search(r"laagste hypotheekrente van 10 jaar vast[^.]{0,220}?([\d,]+)\s*%", ruw, re.S | re.I)
+            if treffer:
+                rente = float(treffer.group(1).replace(",", "."))
+                bron_rente = f"de laagste 10-jaars NHG-rente van dit moment ({_pct(rente, 2)}, via hypotheekrente.nl)"
+        except Exception:
+            pass
+    maandrente = rente / 100 / 12
+    maanden = jaren * 12
+    if maandrente > 0:
+        maand = bedrag * maandrente / (1 - (1 + maandrente) ** -maanden)
+    else:
+        maand = bedrag / maanden
+    totaal = maand * maanden
+    return {
+        "naam": "maandlasten",
+        "bron": "de engine zelf (annuïteitenformule)",
+        "tekst": (
+            f"Hypotheek van {_euro(bedrag, 0)} tegen {_pct(rente, 2)} rente over {jaren} jaar: "
+            f"{_euro(maand)} per maand (annuïteitenhypotheek). In totaal betaal je {_euro(totaal, 0)}, "
+            f"waarvan {_euro(totaal - bedrag, 0)} rente. Gerekend met {bron_rente}. "
+            "Dit is een eigen berekening: een geldverstrekker telt er nog kosten, verzekeringen en "
+            "een eventuele NHG-opslag bij op, en bij een spaar- of aflossingsvrije hypotheek ligt de "
+            "maandlast anders."
+        ),
+    }
+
+
+_AANDELEN = {
+    "asml": ("ASML.AS", "ASML"), "ing": ("INGA.AS", "ING"), "abn": ("ABN.AS", "ABN AMRO"),
+    "shell": ("SHELL.AS", "Shell"), "heineken": ("HEIA.AS", "Heineken"),
+    "ahold": ("AD.AS", "Ahold Delhaize"), "philips": ("PHIA.AS", "Philips"),
+    "unilever": ("UNA.AS", "Unilever"), "wolters": ("WKL.AS", "Wolters Kluwer"),
+    "akzo": ("AKZA.AS", "AkzoNobel"), "dsm": ("DSFIR.AS", "DSM-Firmenich"), "asr": ("ASRNL.AS", "a.s.r."),
+    "besi": ("BESI.AS", "BE Semiconductor"), "adidas": ("ADS.DE", "Adidas"), "bmw": ("BMW.DE", "BMW"),
+    "apple": ("AAPL", "Apple"), "microsoft": ("MSFT", "Microsoft"), "tesla": ("TSLA", "Tesla"),
+    "coca": ("KO", "Coca-Cola"), "netflix": ("NFLX", "Netflix"),
+}
+
+
+def gereedschap_dividend(argument: str) -> dict:
+    """Wat een aandeel aan dividend uitkeert (Yahoo Finance)."""
+    vraag = (argument or "").strip()
+    laag = vraag.lower()
+    symbool = ""
+    naam = ""
+    for woord, (code, nette_naam) in _AANDELEN.items():
+        if re.search(rf"\b{re.escape(woord)}\b", laag):
+            symbool, naam = code, nette_naam
+            break
+    if not symbool:
+        treffer = re.search(r"\b([A-Z]{2,5}(?:\.[A-Z]{1,3})?)\b", vraag)
+        if treffer:
+            symbool, naam = treffer.group(1), treffer.group(1)
+    if not symbool:
+        return {"naam": "dividend", "bron": "finance.yahoo.com", "tekst": "",
+                "fout": "noem een aandeel (ASML, ING, Shell, Heineken) of een ticker zoals AAPL"}
+    try:
+        gegevens = _beurs(symbool, "1y", dividend=True)
+    except Exception as fout:
+        return {"naam": "dividend", "bron": "finance.yahoo.com", "tekst": "",
+                "fout": f"geen koersgegevens voor {symbool} ({type(fout).__name__})"}
+    meta = gegevens.get("meta") or {}
+    prijs = meta.get("regularMarketPrice")
+    munt = str(meta.get("currency") or "")
+    dividenden = ((gegevens.get("events") or {}).get("dividends") or {})
+    bedragen = []
+    for stuk in dividenden.values():
+        if isinstance(stuk, dict) and isinstance(stuk.get("amount"), (int, float)):
+            bedragen.append((int(stuk.get("date") or 0), float(stuk["amount"])))
+    if not bedragen:
+        return {"naam": "dividend", "bron": "finance.yahoo.com", "tekst": "",
+                "fout": f"{symbool} keerde het afgelopen jaar geen dividend uit volgens Yahoo Finance"}
+    bedragen.sort()
+    som = sum(bedrag for _, bedrag in bedragen)
+    laatste_dag, laatste_bedrag = bedragen[-1]
+    try:
+        wanneer = datetime.datetime.fromtimestamp(laatste_dag).strftime("%d-%m-%Y")
+    except (OverflowError, OSError, ValueError):
+        wanneer = "?"
+    eenheid = f" {munt}" if munt else ""
+    tekst = (f"{naam} ({symbool}): de koers is {_getal(prijs, eenheid)}. Over de laatste twaalf maanden "
+             f"keerde dit aandeel {len(bedragen)} keer dividend uit, samen {_krypto(som)}{eenheid} per aandeel")
+    if isinstance(prijs, (int, float)) and prijs > 0:
+        tekst += f", ofwel een dividendrendement van {_pct(som / prijs * 100, 2)} op de huidige koers"
+    tekst += (f". De laatste uitkering was {_krypto(laatste_bedrag)}{eenheid} op {wanneer}. "
+              "Dat is bruto, in de munt van het fonds, en de uitkeringen van volgend jaar kunnen anders zijn.")
+    return {"naam": "dividend", "bron": "finance.yahoo.com (Yahoo Finance, dividendhistorie van een jaar)",
+            "tekst": tekst}
+
+
+def gereedschap_beursindices(argument: str) -> dict:
+    """Hoe de belangrijkste beursindices ervoor staan (Yahoo Finance)."""
+    regels = []
+    for symbool, naam in (("^AEX", "AEX"), ("^GSPC", "S&P 500"), ("^DJI", "Dow Jones"),
+                          ("^IXIC", "Nasdaq Composite")):
+        try:
+            regels.append(_beurs_regel(symbool, naam))
+        except Exception:
+            continue
+    if not regels:
+        return {"naam": "beursindices", "bron": "finance.yahoo.com", "tekst": "",
+                "fout": "Yahoo Finance gaf geen koersen terug"}
+    return {
+        "naam": "beursindices",
+        "bron": "finance.yahoo.com (Yahoo Finance)",
+        "tekst": ("Beursindices nu: " + " | ".join(regels)
+                  + ". Het percentage tussen haakjes is het verschil met de vorige handelsdag."),
+    }
+
+
+def gereedschap_grondstoffen(argument: str) -> dict:
+    """De prijs van goud, zilver, olie en koper (Yahoo Finance)."""
+    regels = []
+    for symbool, naam in (("GC=F", "goud"), ("SI=F", "zilver"), ("CL=F", "olie WTI"),
+                          ("BZ=F", "olie Brent"), ("HG=F", "koper")):
+        try:
+            regels.append(_beurs_regel(symbool, naam))
+        except Exception:
+            continue
+    if not regels:
+        return {"naam": "grondstoffen", "bron": "finance.yahoo.com", "tekst": "",
+                "fout": "Yahoo Finance gaf geen grondstofprijzen terug"}
+    return {
+        "naam": "grondstoffen",
+        "bron": "finance.yahoo.com (Yahoo Finance, termijnmarkten)",
+        "tekst": ("Grondstofprijzen: " + " | ".join(regels)
+                  + ". Goud en zilver in dollar per troy ounce, olie in dollar per vat van 159 liter en "
+                  "koper in dollar per pond. Het zijn termijnprijzen van de Amerikaanse markten."),
+    }
+
+
+def gereedschap_gasprijs_ttf(argument: str) -> dict:
+    """De groothandelsprijs voor gas op de TTF-markt (Yahoo Finance)."""
+    try:
+        gegevens = _beurs("TTF=F", "1mo")
+    except Exception as fout:
+        return {"naam": "gasprijs", "bron": "finance.yahoo.com", "tekst": "",
+                "fout": f"geen gasprijs ontvangen ({type(fout).__name__})"}
+    meta = gegevens.get("meta") or {}
+    prijs = meta.get("regularMarketPrice")
+    if not isinstance(prijs, (int, float)):
+        return {"naam": "gasprijs", "bron": "finance.yahoo.com", "tekst": "",
+                "fout": "Yahoo Finance gaf geen TTF-prijs terug"}
+    munt = str(meta.get("currency") or "EUR")
+    slot = gegevens.get("indicators", {}).get("quote") or [{}]
+    sloten = [x for x in (slot[0].get("close") or []) if isinstance(x, (int, float))]
+    extra = ""
+    if len(sloten) >= 3:
+        gemiddeld = sum(sloten) / len(sloten)
+        extra = (f" Het gemiddelde van de laatste {len(sloten)} handelsdagen is "
+                 f"{_getal(gemiddeld, ' ' + munt)} per megawattuur.")
+    verandering = meta.get("regularMarketChangePercent")
+    richting = f" ({_pct(verandering, 2, teken=True)} ten opzichte van de vorige dag)" if isinstance(verandering, (int, float)) else ""
+    return {
+        "naam": "gasprijs",
+        "bron": "finance.yahoo.com (TTF-termijncontract)",
+        "tekst": (f"De groothandelsprijs voor aardgas op de Nederlandse TTF-markt is "
+                  f"{_getal(prijs, ' ' + munt)} per megawattuur{richting}.{extra} "
+                  "Dit is de prijs waarmee handelaren rekenen; de prijs op je eigen energierekening "
+                  "komt daar pas na belastingen en leveringskosten uit."),
+    }
+
+
+_CRYPTO = {
+    "bitcoin": "bitcoin", "btc": "bitcoin", "ethereum": "ethereum", "eth": "ethereum",
+    "solana": "solana", "sol": "solana", "cardano": "cardano", "ada": "cardano",
+    "dogecoin": "dogecoin", "doge": "dogecoin", "ripple": "ripple", "xrp": "ripple",
+    "polkadot": "polkadot", "litecoin": "litecoin", "ltc": "litecoin", "tron": "tron",
+}
+
+
+def gereedschap_crypto_omrekenen(argument: str) -> dict:
+    """Een bedrag in bitcoin of ethereum omrekenen naar euro (CoinGecko)."""
+    laag = (argument or "").lower().replace(",", ".")
+    munt = ""
+    muntpositie = -1
+    for woord, naam in _CRYPTO.items():
+        treffer = re.search(rf"\b{re.escape(woord)}\b", laag)
+        if treffer and (muntpositie < 0 or treffer.start() < muntpositie):
+            munt = naam
+            muntpositie = treffer.start()
+    if not munt:
+        return {"naam": "crypto omrekenen", "bron": "coingecko.com", "tekst": "",
+                "fout": "noem een munt (bitcoin, ethereum, solana) en een bedrag"}
+    bedrag = None
+    treffer = re.search(r"(\d+(?:\.\d+)?)", laag)
+    if treffer:
+        bedrag = float(treffer.group(1))
+    gegevens = _haal_json(f"https://api.coingecko.com/api/v3/simple/price?ids={munt}&vs_currencies=eur")
+    koers = ((gegevens or {}).get(munt) or {}).get("eur")
+    if not isinstance(koers, (int, float)) or koers <= 0:
+        return {"naam": "crypto omrekenen", "bron": "coingecko.com", "tekst": "",
+                "fout": "CoinGecko gaf geen koers terug"}
+    naam = munt.capitalize()
+    if bedrag is None:
+        return {
+            "naam": "crypto omrekenen",
+            "bron": "coingecko.com",
+            "tekst": f"1 {naam} is nu {_euro(koers, 0)}. Noem een bedrag voor de volledige omrekening.",
+        }
+    europositie = laag.find("euro")
+    omgekeerd = 0 <= europositie < muntpositie
+    if omgekeerd:
+        return {
+            "naam": "crypto omrekenen",
+            "bron": "coingecko.com (koers in euro)",
+            "tekst": (f"{_euro(bedrag, 0)} is nu {_krypto(bedrag / koers)} {naam} "
+                      f"(1 {naam} = {_euro(koers, 0)}). De koers beweegt de hele dag door."),
+        }
+    return {
+        "naam": "crypto omrekenen",
+        "bron": "coingecko.com (koers in euro)",
+        "tekst": (f"{_getal(bedrag, ' ' + naam)} is nu {_euro(bedrag * koers, 0)} "
+                  f"(1 {naam} = {_euro(koers, 0)}). De koers beweegt de hele dag door."),
+    }
+
+
+def gereedschap_box3(argument: str) -> dict:
+    """Wat je aan vermogensbelasting betaalt (eigen berekening, tarieven 2026)."""
+    laag = (argument or "").lower().replace(",", ".")
+    bedragen: dict = {}
+    patroon = re.compile(r"(\d[\d.]*)\s*(miljoen|ton|duizend|k)?\s*(euro|eur)?")
+    for treffer in patroon.finditer(laag):
+        try:
+            waarde = float(treffer.group(1).replace(".", "")) if treffer.group(1).count(".") else float(treffer.group(1))
+        except ValueError:
+            continue
+        eenheid = treffer.group(2) or ""
+        if eenheid == "miljoen":
+            waarde *= 1000000
+        elif eenheid in ("ton", "duizend"):
+            waarde *= 1000
+        if waarde < 100:
+            continue
+        begin = laag[max(0, treffer.start() - 30):treffer.start() + len(treffer.group(0)) + 12]
+        if "schuld" in begin or "lening" in begin or "hypotheek" in begin:
+            bedragen["schuld"] = bedragen.get("schuld", 0.0) + waarde
+        elif "belegg" in begin or "aandeel" in begin or "crypto" in begin or "overige" in begin:
+            bedragen["beleggingen"] = bedragen.get("beleggingen", 0.0) + waarde
+        else:
+            bedragen["sparen"] = bedragen.get("sparen", 0.0) + waarde
+    if not bedragen:
+        return {"naam": "box 3", "bron": "belastingdienst.nl", "tekst": "",
+                "fout": "noem je vermogen, bijvoorbeeld '1 ton spaargeld en 50.000 euro beleggingen'"}
+    sparen = bedragen.get("sparen", 0.0)
+    beleggingen = bedragen.get("beleggingen", 0.0)
+    schuld = bedragen.get("schuld", 0.0)
+    partner = "partner" in laag or "samen" in laag
+    heffingsvrij = 118714.0 if partner else 59357.0
+    drempel = 7600.0 if partner else 3800.0
+    schuld_aftrek = max(0.0, schuld - drempel)
+    grondslag = sparen + beleggingen - schuld_aftrek
+    if grondslag <= 0:
+        return {
+            "naam": "box 3",
+            "bron": "belastingdienst.nl (tarieven 2026)",
+            "tekst": ("Met deze bedragen valt er niets in box 3 te belasten: je schulden zijn even groot "
+                      "als of groter dan je bezittingen."),
+        }
+    rendement = sparen * 0.0128 + beleggingen * 0.06 - schuld_aftrek * 0.027
+    percentage = rendement / grondslag if grondslag else 0.0
+    belastbaar = max(0.0, grondslag - heffingsvrij)
+    voordeel = belastbaar * percentage
+    belasting = voordeel * 0.36
+    aanname = "" if "sparen" in bedragen or "beleggingen" in bedragen else (
+        " Ik heb je bedrag als spaargeld gerekend; beleggingen worden zwaarder belast, dus zeg het "
+        "als het om aandelen of crypto gaat.")
+    heffingstekst = (_euro(heffingsvrij, 0) + " samen, dat is " + _euro(heffingsvrij / 2, 0)
+                     + " per persoon") if partner else _euro(heffingsvrij, 0) + " per persoon"
+    return {
+        "naam": "box 3",
+        "bron": "belastingdienst.nl (forfaitaire percentages en tarief van 2026)",
+        "tekst": (
+            f"Met {_euro(sparen, 0)} spaargeld, {_euro(beleggingen, 0)} beleggingen en "
+            f"{_euro(schuld, 0)} schuld kom je op een rendementsgrondslag van {_euro(grondslag, 0)}. "
+            f"Het forfaitaire rendement is {_pct(percentage * 100, 2)} daarvan. Na aftrek van het heffingsvrije "
+            f"vermogen ({heffingstekst}) "
+            f"blijft {_euro(belastbaar, 0)} over, en 36% daarvan is {_euro(belasting, 0)} belasting per jaar."
+            + aanname
+            + " Gerekend met de percentages van 2026: 1,28% op spaargeld, 6,00% op beleggingen en 2,70% "
+              "op schulden (na een drempel van "
+            + _euro(drempel, 0) + "). Het zijn eigen berekeningen: bij een laag werkelijk rendement "
+              "mag je ook dat aangeven, en de bedragen voor spaargeld en schulden zijn nog voorlopig."
+        ),
+    }
+
+
+def gereedschap_vakantiegeld(argument: str) -> dict:
+    """Wat je bruto aan vakantiegeld krijgt (eigen berekening, wettelijk 8%)."""
+    laag = (argument or "").lower().replace(",", ".")
+    bedrag = 0.0
+    per_jaar = False
+    for treffer in re.finditer(r"(\d[\d.]*)\s*(miljoen|duizend|k)?\s*(euro|eur)?", laag):
+        try:
+            waarde = float(treffer.group(1).replace(".", ""))
+        except ValueError:
+            continue
+        if treffer.group(2) == "duizend":
+            waarde *= 1000
+        if waarde > bedrag:
+            bedrag = waarde
+            # een bedrag van tienduizend of meer is een jaarloon, geen maandloon
+            per_jaar = ("per jaar" in laag or "jaarloon" in laag or "bruto jaar" in laag
+                        or waarde >= 10000)
+    if bedrag <= 0:
+        return {"naam": "vakantiegeld", "bron": "de engine zelf", "tekst": "",
+                "fout": "noem je brutoloon per maand of per jaar, bijvoorbeeld '3500 euro per maand'"}
+    jaar = bedrag if per_jaar else bedrag * 12
+    vakantiegeld = jaar * 0.08
+    return {
+        "naam": "vakantiegeld",
+        "bron": "de engine zelf (wettelijke vakantiebijslag van 8% van het brutoloon)",
+        "tekst": (
+            f"Bij een brutoloon van {_euro(jaar, 0)} per jaar is je vakantiegeld "
+            f"{_euro(vakantiegeld)} bruto, en je brutoloon inclusief vakantiegeld "
+            f"{_euro(jaar + vakantiegeld, 0)} per jaar. De wet schrijft minimaal 8% van het brutoloon "
+            "voor; in veel cao's is het precies dat bedrag, bij sommige werkgevers iets meer. "
+            "Werkgevers betalen het meestal in mei of juni uit. Over vakantiegeld gaat loonheffing "
+            "volgens het bijzondere tarief, dus wat je netto krijgt hangt af van je jaarloon en je "
+            "persoonlijke situatie -- dat kan de engine niet voor je uitrekenen."
+        ),
+    }
+def gereedschap_bijtelling(argument: str) -> dict:
+    """Wat een leaseauto per jaar aan bijtelling kost (eigen berekening, tarieven 2026)."""
+    laag = (argument or "").lower().replace(",", ".")
+    waarde = 0.0
+    for treffer in re.finditer(r"(\d[\d.]{2,})\s*(miljoen|duizend|k)?\s*(euro|eur)?", laag):
+        try:
+            bedrag = float(treffer.group(1).replace(".", ""))
+        except ValueError:
+            continue
+        if treffer.group(2) == "duizend":
+            bedrag *= 1000
+        if bedrag > waarde:
+            waarde = bedrag
+    if waarde <= 0:
+        return {"naam": "bijtelling", "bron": "belastingdienst.nl", "tekst": "",
+                "fout": "noem de cataloguswaarde, bijvoorbeeld 'elektrische auto van 45000 euro'"}
+    elektrisch = any(woord in laag for woord in ("elektrisch", "elektrische", "ev", "tesla",
+                                                 "waterstof", "stekker"))
+    if elektrisch:
+        tot_grens = min(waarde, 30000.0)
+        boven_grens = max(0.0, waarde - 30000.0)
+        bruto = tot_grens * 0.18 + boven_grens * 0.22
+        uitleg = ("18% over de eerste 30.000 euro van de cataloguswaarde en 22% over het deel daarboven")
+    else:
+        bruto = waarde * 0.22
+        uitleg = "22% over de hele cataloguswaarde"
+    return {
+        "naam": "bijtelling",
+        "bron": "belastingdienst.nl (bijtellingspercentages 2026)",
+        "tekst": (
+            f"Een {'elektrische ' if elektrisch else ''}auto van {_euro(waarde, 0)} in 2026: {uitleg}. "
+            f"Dat is {_euro(bruto, 0)} bijtelling per jaar, ofwel {_euro(bruto / 12)} per maand bruto bij "
+            f"je inkomen. In de hoogste schijf (49,50% in 2026) kost dat ongeveer {_euro(bruto * 0.495 / 12)} "
+            f"netto per maand; zit je in een lagere schijf, dan is het minder. "
+            "Let op: het percentage van het jaar waarin de auto voor het eerst op kenteken ging, blijft "
+            "60 maanden staan (17% voor 2025, 18% voor 2026, 20% voor 2027 en 22% vanaf 2028). "
+            "Rijd je minder dan 500 kilometer per jaar privé, dan hoef je niets bij te tellen -- dat moet "
+            "je wel kunnen aantonen. Dit is een eigen berekening; je werkgever verrekent het met je loon."
+        ),
+    }
+
+
+def gereedschap_goedkoopste_pomp(plaats: str) -> dict:
+    """Waar je in de buurt kunt tanken, met de landelijke pompprijzen (OSM en CBS)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "goedkoopste pomp", "bron": "openstreetmap.org", "tekst": "",
+                "fout": "noem een plaats, bijvoorbeeld 'tanken in Utrecht'"}
+    regels = []
+    nette = plaats
+    try:
+        plekken, nette = _osm_nabij(plaats, '"amenity"="fuel"', 3000, 12)
+        for afstand, naam, kenmerken in plekken[:6]:
+            stuk = naam or kenmerken.get("operator") or "tankstation"
+            merk = kenmerken.get("brand")
+            if merk and merk not in stuk:
+                stuk = f"{stuk} ({merk})"
+            regels.append(f"{stuk} op {_getal(afstand, ' km')}")
+    except Exception as fout:
+        regels = []
+        nette = plaats
+        foutmelding = f"{type(fout).__name__}: {fout}"
+    else:
+        foutmelding = ""
+    prijzen = ""
+    try:
+        jaar = datetime.date.today().year
+        rijen = []
+        for poging in (jaar, jaar - 1):
+            rijen = [rij for rij in _cbs_rijen(
+                "80416ned", f"startswith(Perioden,'{poging}')",
+                "Perioden,BenzineEuro95_1,Diesel_2,Lpg_3", 400)
+                if isinstance(rij.get("BenzineEuro95_1"), (int, float))]
+            if rijen:
+                break
+        if rijen:
+            rijen.sort(key=lambda rij: str(rij.get("Perioden") or ""))
+            nieuwste = rijen[-1]
+            periode = str(nieuwste.get("Perioden") or "")
+            dag = f"{periode[6:8]}-{periode[4:6]}-{periode[:4]}" if len(periode) == 8 else periode
+            prijzen = (f" De landelijke gemiddelde pompprijs van {dag} was "
+                       f"Euro95 {_euro(nieuwste.get('BenzineEuro95_1'), 3)}, "
+                       f"diesel {_euro(nieuwste.get('Diesel_2'), 3)} en "
+                       f"lpg {_euro(nieuwste.get('Lpg_3'), 3)} per liter (CBS).")
+    except Exception:
+        prijzen = ""
+    if regels:
+        kop = f"Tankstations binnen 3 kilometer van {nette}: " + ", ".join(regels) + "."
+    else:
+        kop = (f"De tankstations van OpenStreetMap zijn nu niet op te halen rond {nette}"
+               + (f" ({foutmelding})" if foutmelding else "") + "; probeer het zo nog eens.")
+    return {
+        "naam": "goedkoopste pomp",
+        "bron": "openstreetmap.org (Overpass) en opendata.cbs.nl (80416ned)",
+        "tekst": (kop + prijzen + " De pompprijzen per station verschillen per dag en per pomp; welke pomp "
+                  "vandaag het goedkoopst is, zie je in de ANWB Onderweg-app of op "
+                  "https://www.anwb.nl/verkeer/brandstofprijzen."),
+    }
+
+
+def gereedschap_huurwoningen(plaats: str) -> dict:
+    """Waar je huurwoningen in een plaats vindt (de aanbieders zelf)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    waar = f" in {plaats}" if plaats else ""
+    link = f"https://www.pararius.nl/huurwoningen/{urllib.parse.quote(plaats.lower().replace(' ', '-'))}" if plaats else "https://www.pararius.nl/huurwoningen"
+    return {
+        "naam": "huurwoningen",
+        "bron": "pararius.nl, funda.nl en huurwoningen.nl",
+        "tekst": (
+            f"Het aanbod van huurwoningen{waar} kan de engine niet zelf lezen: Pararius en de meeste andere "
+            "woonsites blokkeren geautomatiseerde bezoeken (Pararius antwoordt met een foutcode). "
+            f"Kijk zelf op {link}, op https://www.funda.nl/huur/ en op https://www.huurwoningen.nl/. "
+            "De grootste kans op een betaalbare woning heb je via de wooncorporatie in je gemeente "
+            "(inschrijven bij WoningNet of bij de corporatie zelf) en via de gemeentelijke "
+            "urgentie- en woonruimteverordening. "
+            "Staat er iets te huur bij jou in de buurt? Dan komt dat meestal ook in het nieuws: "
+            "vraag het met /nieuws."
+        ),
+    }
+
+
+def gereedschap_inflatie_productgroep(argument: str) -> dict:
+    """Welke producten het hardst in prijs stegen (CBS)."""
+    try:
+        periode, groepen, namen, totaal = _cpi_laatste()
+    except Exception as fout:
+        return {"naam": "inflatie per productgroep", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": f"geen CBS-cijfers ontvangen ({type(fout).__name__})"}
+    if not groepen:
+        return {"naam": "inflatie per productgroep", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": "de CBS-tabel bevatte geen productgroepen met cijfers"}
+    hoofd = {code: waarde for code, waarde in groepen.items()
+             if re.match(r"^CPI\d{2}0000$", code)}
+    if len(hoofd) < 4:
+        hoofd = groepen
+    gesorteerd = sorted(hoofd.items(), key=lambda stuk: stuk[1])
+    maanden = ["januari", "februari", "maart", "april", "mei", "juni", "juli",
+               "augustus", "september", "oktober", "november", "december"]
+    maand = periode
+    of_maand = re.search(r"(\d{4})MM(\d{2})", periode)
+    if of_maand:
+        maand = f"{maanden[int(of_maand.group(2)) - 1]} {of_maand.group(1)}"
+    stijgers = ", ".join(f"{_kort(_schone_groep(namen.get(code, code)), 44)} {_pct(waarde, 1, teken=True)}"
+                         for code, waarde in gesorteerd[-3:][::-1])
+    dalers = ", ".join(f"{_kort(_schone_groep(namen.get(code, code)), 44)} {_pct(waarde, 1, teken=True)}"
+                       for code, waarde in gesorteerd[:2])
+    return {
+        "naam": "inflatie per productgroep",
+        "bron": f"opendata.cbs.nl (tabel 86141NED, {periode})",
+        "tekst": (
+            (f"De inflatie in Nederland was in {maand} {_pct(totaal, 1)} ten opzichte van een jaar eerder. "
+             if isinstance(totaal, float) else "")
+            + f"Het hardst in prijs gestegen: {stijgers}. "
+            + f"Goedkoper werden: {dalers}. "
+            "Dat zijn de hoofdniveaus van het CBS (voeding, vervoer, huisvesting, enzovoort), "
+            "jaarmutatie in procenten ten opzichte van een jaar eerder. "
+            "Wil je één product weten, dan heeft het CBS ook de fijnere groepen -- vraag het dan "
+            "met de productnaam erbij."
+        ),
+    }
+
+
+def gereedschap_koopkracht(argument: str) -> dict:
+    """Wat je salaris in koopkracht doet, met de inflatie van het CBS erbij."""
+    laag = (argument or "").lower().replace(",", ".")
+    verhoging = None
+    treffer = re.search(r"(\d+(?:\.\d+)?)\s*(?:%|procent|pct)", laag)
+    if treffer:
+        verhoging = float(treffer.group(1))
+    bedrag = 0.0
+    for stuk in re.finditer(r"(\d[\d.]{2,})\s*(miljoen|duizend|k)?\s*(euro|eur)?", laag):
+        try:
+            waarde = float(stuk.group(1).replace(".", ""))
+        except ValueError:
+            continue
+        if stuk.group(2) == "duizend":
+            waarde *= 1000
+        if waarde > bedrag:
+            bedrag = waarde
+    if bedrag <= 0:
+        return {"naam": "koopkracht", "bron": "de engine zelf", "tekst": "",
+                "fout": "noem je brutoloon, bijvoorbeeld '3500 euro en 3 procent verhoging'"}
+    if verhoging is None:
+        verhoging = 0.0
+    try:
+        periode, _groepen, _namen, totaal = _cpi_laatste()
+    except Exception as fout:
+        return {"naam": "koopkracht", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": f"geen inflatiecijfers van het CBS ({type(fout).__name__})"}
+    if not isinstance(totaal, float):
+        return {"naam": "koopkracht", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": "het CBS gaf geen totaal inflatiecijfer terug"}
+    nieuw = bedrag * (1 + verhoging / 100)
+    reeel = ((1 + verhoging / 100) / (1 + totaal / 100) - 1) * 100
+    reeel_bedrag = bedrag * (1 + reeel / 100)
+    maanden = ["januari", "februari", "maart", "april", "mei", "juni", "juli",
+               "augustus", "september", "oktober", "november", "december"]
+    maand = periode
+    of_maand = re.search(r"(\d{4})MM(\d{2})", periode)
+    if of_maand:
+        maand = f"{maanden[int(of_maand.group(2)) - 1]} {of_maand.group(1)}"
+    if reeel >= 0:
+        oordeel = "je gaat er in koopkracht op vooruit"
+    else:
+        oordeel = "je gaat er in koopkracht op achteruit"
+    return {
+        "naam": "koopkracht",
+        "bron": f"de engine zelf met het CBS-inflatiecijfer van {maand} (tabel 86141NED)",
+        "tekst": (
+            f"Bij {_euro(bedrag, 0)} bruto per maand en een verhoging van {_pct(verhoging, 1)} wordt je "
+            f"brutoloon {_euro(nieuw, 0)} per maand (ik reken met een maandbedrag). De inflatie was in {maand} "
+            f"{_pct(totaal, 1)} ten opzichte van een jaar eerder. Daarmee is je koopkrachtverandering ongeveer "
+            f"{_pct(reeel, 1, teken=True)}: {oordeel}. "
+            f"In geld van nu is {_euro(nieuw, 0)} dan net zoveel waard als "
+            f"{_euro(reeel_bedrag, 0)} vorig jaar. "
+            "Dit is een eigen berekening met de inflatie van nu; de inflatie van het komende jaar kan "
+            "anders uitvallen, en de belasting die je betaalt verandert niet mee."
+        ),
+    }
+
+
+def gereedschap_toeslagen(argument: str) -> dict:
+    """Of je recht hebt op huur- of zorgtoeslag (Dienst Toeslagen)."""
+    inleiding = ""
+    try:
+        ruw = _haal("https://www.toeslagen.nl/", limiet=20).decode("utf-8", "replace")
+        schoon = _schoon(re.sub(r"<script.*?</script>|<style.*?</style>", " ", ruw, flags=re.S))
+        treffer = re.search(r"(Een bijdrage voor de kosten[^.]{0,160}\.)", schoon)
+        if treffer:
+            inleiding = "Dienst Toeslagen: " + treffer.group(1) + " "
+    except Exception:
+        inleiding = ""
+    return {
+        "naam": "toeslagen",
+        "bron": "toeslagen.nl (Dienst Toeslagen)",
+        "tekst": (
+            inleiding +
+            "Er zijn vier toeslagen: zorgtoeslag, huurtoeslag, kinderopvangtoeslag en kindgebonden budget. "
+            "Of je er recht op hebt hangt af van je inkomen, je huur en je huishouden. Die gegevens heeft "
+            "de engine niet, dus vul ze zelf in met de proefberekening van de Belastingdienst: "
+            "https://www.belastingdienst.nl/wps/wcm/connect/nl/toeslagen/content/hulpmiddel-proefberekening-toeslagen. "
+            "Huurtoeslag vraag je aan via toeslagen.nl; voor zorgtoeslag geldt dat je die ook automatisch "
+            "kunt laten uitbetalen bij je zorgverzekeraar. Algemene informatie staat op "
+            "https://www.toeslagen.nl/."
+        ),
+    }
+
+
+def gereedschap_aow(argument: str) -> dict:
+    """Wanneer je AOW krijgt en hoe hoog die is (SVB, stand 2026)."""
+    titels = []
+    try:
+        vandaag = datetime.date.today()
+        begin = (vandaag - datetime.timedelta(days=730)).isoformat()
+        for stuk in _sru(f'"AOW-leeftijd" and dt.date within "{begin} {vandaag.isoformat()}"', 20):
+            if "aow-leeftijd" not in stuk["titel"].lower() and "aow-leeftijden" not in stuk["titel"].lower():
+                continue
+            label = f"{_kort(stuk['titel'], 70)}"
+            if stuk.get("datum"):
+                label += f" ({stuk['datum']})"
+            titels.append(label)
+            if len(titels) >= 4:
+                break
+    except Exception:
+        titels = []
+    tekst = (
+        "De AOW-leeftijd is 67 jaar in 2026 en 2027. Vanaf 2028 is die 67 jaar en 3 maanden, en daarna "
+        "gaat de leeftijd in stappen mee met de levensverwachting. Wanneer jij precies aan de beurt bent "
+        "hangt af van je geboortejaar; de SVB rekent dat per geboortejaar voor je uit op "
+        "https://www.svb.nl/nl/aow/aow-leeftijd (ook te vinden via svb.nl > AOW). "
+        "De AOW is een basispensioen: je bouwt het op tussen je 15e en je AOW-leeftijd, met 2% per jaar "
+        "dat je in Nederland woonde of werkte. Volgens de SVB krijg je per 1 juli 2026 bruto per maand "
+        "1.662,16 euro als alleenstaande en 1.139,39 euro per persoon als je getrouwd bent of samenwoont, "
+        "plus vakantiegeldopbouw. svb.nl blokkeert geautomatiseerd ophalen (foutcode 403), dus die "
+        "bedragen staan hier met bron en datum -- check je eigen bedrag op svb.nl of in Mijn SVB."
+    )
+    if titels:
+        tekst += " Recente officiële publicaties over de AOW-leeftijd: " + " | ".join(titels) + "."
+    return {
+        "naam": "aow",
+        "bron": "svb.nl (bedragen per 1 juli 2026) en repository.overheid.nl",
+        "tekst": tekst,
+    }
+
+
+def gereedschap_gemeentelast(plaats: str) -> dict:
+    """Wat je gemeente per inwoner aan heffingen begroot (CBS)."""
+    plaats = (plaats or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "gemeentelijke lasten", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": "noem een gemeente, bijvoorbeeld 'OZB in Utrecht'"}
+    naam = re.sub(r"^(?:de\s+)?gemeente\s+", "", plaats, flags=re.I).strip().lower()
+    try:
+        namen = {}
+        for rij in _cbs_dimensie("83643NED", "RegioS"):
+            titel = _schoon(str(rij.get("Title") or ""))
+            if not titel:
+                continue
+            kaal = re.sub(r"\s*\(gemeente\)\s*$", "", titel).lower()
+            namen[kaal] = str(rij.get("Key") or "")
+            namen.setdefault(titel.lower(), str(rij.get("Key") or ""))
+    except Exception as fout:
+        return {"naam": "gemeentelijke lasten", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": f"geen gemeentelijst van het CBS ({type(fout).__name__})"}
+    sleutel = namen.get(naam)
+    if not sleutel:
+        kandidaten = sorted((len(titel), code) for titel, code in namen.items() if titel.startswith(naam))
+        if kandidaten:
+            sleutel = kandidaten[0][1]
+    if not sleutel:
+        return {"naam": "gemeentelijke lasten", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": f"de gemeente '{plaats}' staat niet in de CBS-tabel; noem de officiële gemeentenaam"}
+    try:
+        rijen = _cbs_rijen("83643NED", f"RegioS eq '{sleutel}'",
+                           "GemeentelijkeHeffingenVanaf2017,Perioden,GemeentelijkeHeffingenEuroInwoner_2", 250)
+    except Exception as fout:
+        return {"naam": "gemeentelijke lasten", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": f"geen heffingen van het CBS ({type(fout).__name__})"}
+    per_jaar: dict = {}
+    for rij in rijen:
+        jaar = str(rij.get("Perioden") or "")
+        code = str(rij.get("GemeentelijkeHeffingenVanaf2017") or "").strip()
+        bedrag = rij.get("GemeentelijkeHeffingenEuroInwoner_2")
+        if len(jaar) < 4 or not isinstance(bedrag, (int, float)):
+            continue
+        per_jaar.setdefault(jaar[:4], {})[code] = float(bedrag)
+    if not per_jaar:
+        return {"naam": "gemeentelijke lasten", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": f"geen cijfers voor {plaats} in de CBS-tabel"}
+    jaar = sorted(per_jaar)[-1]
+    cijfers = per_jaar[jaar]
+    onderdelen = [("A046999", "onroerendezaakbelasting"),
+                  ("A047006", "rioolheffing"),
+                  ("A047007", "reinigingsrechten en afvalstoffenheffing")]
+    regels = [f"{label} {_euro(cijfers[code], 0)} per inwoner"
+              for code, label in onderdelen if isinstance(cijfers.get(code), (int, float))]
+    if not regels:
+        return {"naam": "gemeentelijke lasten", "bron": "opendata.cbs.nl", "tekst": "",
+                "fout": f"nog geen heffingscijfers voor {plaats} in {jaar}"}
+    return {
+        "naam": "gemeentelijke lasten",
+        "bron": f"opendata.cbs.nl (tabel 83643NED, begroting {jaar})",
+        "tekst": (
+            f"Gemeentelijke heffingen van {plaats.title()} in {jaar} (begroting): "
+            + ", ".join(regels)
+            + ". Dit zijn bedragen per inwoner en niet per huishouden; wat jij precies betaalt staat in de "
+              "aanslag van je gemeente, want die hangt af van de waarde van je huis, de grootte van je "
+              "huishouden en de tarieven van dit jaar. Het gaat hier om de begroting: de definitieve "
+              "cijfers komen later."
+        ),
+    }
+# ---- overheid en recht -----------------------------------------------------
+
+
+def gereedschap_raadsbesluiten(argument: str) -> dict:
+    """Wat gemeenteraden onlangs hebben besloten (Gemeenteblad via de SRU)."""
+    vraag = (argument or "").strip()
+    vandaag = datetime.date.today()
+    begin = (vandaag - datetime.timedelta(days=400)).isoformat()
+    einde = vandaag.isoformat()
+    gemeente = _kort(_plaats_uit(vraag), 40) if vraag else ""
+    gemeente = re.sub(r"(?i)^(?:gemeente|de|het)\s+", "", gemeente).strip()
+    gebruikt = ""
+    try:
+        treffers = _sru(f'dt.title="raadsbesluit" and dt.date within "{begin} {einde}"', 40)
+        venster = f' and dt.date within "{begin} {einde}"'
+        if gemeente:
+            gekozen = [stuk for stuk in treffers if gemeente.lower() in (stuk.get("maker") or "").lower()]
+            if gekozen:
+                treffers, gebruikt = gekozen, gemeente
+            else:
+                extra = _sru(f'"raadsbesluit" and dt.creator="{gemeente}"{venster}', 40)
+                if extra:
+                    treffers, gebruikt = extra, gemeente
+        elif len(treffers) < 3:
+            extra = _sru(f'"raadsbesluit"{venster}', 40)
+            if len(extra) >= 3:
+                treffers = extra
+    except Exception as fout:
+        return {"naam": "raadsbesluiten", "bron": "officielebekendmakingen.nl", "tekst": "",
+                "fout": f"de bekendmakingendienst gaf geen antwoord ({type(fout).__name__})"}
+    if not treffers:
+        return {
+            "naam": "raadsbesluiten",
+            "bron": "officielebekendmakingen.nl (Gemeenteblad)",
+            "tekst": (f"Geen raadsbesluiten gevonden{' van ' + gemeente if gemeente else ''} in de laatste "
+                      "maanden. Raadsbesluiten staan in het Gemeenteblad op "
+                      "https://www.officielebekendmakingen.nl/ en gemeenten publiceren ze ook op hun eigen "
+                      "raadsinformatiepagina."),
+        }
+    regels = []
+    for stuk in treffers[:6]:
+        maker = f" ({stuk['maker']})" if stuk.get("maker") else ""
+        datum = f" {stuk['datum']}" if stuk.get("datum") else ""
+        regels.append(f"{_kort(stuk['titel'], 96)}{maker}{datum}")
+    waar = f" van {gebruikt}" if gebruikt else (" in het land" if gemeente else "")
+    return {
+        "naam": "raadsbesluiten",
+        "bron": "officielebekendmakingen.nl via repository.overheid.nl (Gemeenteblad)",
+        "tekst": ("Recente raadsbesluiten" + waar
+                  + (f" (bij een zoekvraag over {gemeente} komen hier ook besluiten van andere gemeenten "
+                     "tussen te staan)" if gemeente and not gebruikt else "")
+                  + ": " + " | ".join(regels)
+                  + ". Deze lijst komt uit het Gemeenteblad, waar gemeenteraden hun besluiten publiceren. "
+                    "Het eerdere kanaal Open Raadsinformatie antwoordt niet meer; de volledige stukken en "
+                    "de vergaderverslagen staan op de raadsinformatiesite van de gemeente zelf."),
+    }
+
+
+def gereedschap_moties(argument: str) -> dict:
+    """Welke moties en amendementen er in de Kamer lopen (via Google Nieuws)."""
+    titels = _nieuwsfeed("site:tweedekamer.nl motie OR amendement", "moties")
+    if not titels:
+        titels = _nieuwsfeed("motie amendement Tweede Kamer", "moties")
+    if not titels:
+        return {"naam": "moties", "bron": "tweedekamer.nl", "tekst": "",
+                "fout": "geen nieuws over moties en amendementen gevonden"}
+    return {
+        "naam": "moties",
+        "bron": "tweedekamer.nl (via Google Nieuws)",
+        "tekst": ("Moties en amendementen in het nieuws: " + " | ".join(titels)
+                  + ". De officiële lijsten met moties en amendementen staan bij het kamerstuk op "
+                    "https://www.tweedekamer.nl/kamerstukken."),
+    }
+
+
+def gereedschap_vergaderagenda(argument: str) -> dict:
+    """Wat er de komende dagen in de Tweede Kamer op de agenda staat."""
+    try:
+        ruw = _kamer_pagina("https://www.tweedekamer.nl/debat_en_vergadering")
+    except Exception as fout:
+        return {"naam": "vergaderagenda", "bron": "tweedekamer.nl", "tekst": "",
+                "fout": f"de pagina van de Tweede Kamer gaf geen antwoord ({type(fout).__name__})"}
+    vandaag = re.search(r'dcterms\.title" content="Agenda van ([^"]+)"', ruw)
+    agenda = f" De agenda van {vandaag.group(1)} staat vooraan op de site." if vandaag else ""
+    regels = []
+    for blok in re.split(r'class="m-card__title"', ruw)[1:]:
+        titel = re.search(r'href="(/debat_en_vergadering/uitgelicht/[^"]+)"[^>]*>\s*([^<]{4,120})', blok)
+        datum = re.search(r'<time[^>]*datetime="(\d{4}-\d{2}-\d{2})', blok)
+        omschrijving = re.search(r"<p\s*>?\s*<p>([^<]{20,240})", blok)
+        if not titel or not datum:
+            continue
+        stuk = f"{datum.group(1)[8:10]}-{datum.group(1)[5:7]}: {titel.group(2).strip()}"
+        if omschrijving:
+            stuk += f" -- {_kort(_schoon(omschrijving.group(1)), 120)}"
+        regels.append((datum.group(1), stuk))
+    if not regels:
+        return {
+            "naam": "vergaderagenda",
+            "bron": "tweedekamer.nl",
+            "tekst": ("De agenda van de Tweede Kamer kon niet uit de pagina gelezen worden. Kijk zelf op "
+                      "https://www.tweedekamer.nl/debat_en_vergadering; daar staan de plenaire vergaderingen, "
+                      "de commissievergaderingen en de stemmingen per dag."),
+        }
+    regels.sort()
+    vandaag_iso = datetime.date.today().isoformat()
+    toekomst = [stuk for stuk in regels if stuk[0] >= vandaag_iso]
+    if toekomst:
+        regels = toekomst
+        kop = "Wat er in de Tweede Kamer op de agenda staat (uitgelichte debatten): "
+    else:
+        kop = "Wat er de laatste tijd in de Tweede Kamer op de agenda stond (uitgelichte debatten): "
+    return {
+        "naam": "vergaderagenda",
+        "bron": "tweedekamer.nl/debat_en_vergadering",
+        "tekst": (kop
+                  + " | ".join(stuk for _, stuk in regels[:6]) + "." + agenda
+                  + " De volledige agenda per dag staat op https://www.tweedekamer.nl/debat_en_vergadering."),
+    }
+
+
+def gereedschap_stemmingen(argument: str) -> dict:
+    """Hoe er in de Tweede Kamer gestemd is (tweedekamer.nl)."""
+    try:
+        ruw = _kamer_pagina("https://www.tweedekamer.nl/kamerstukken/stemmingsuitslagen")
+    except Exception as fout:
+        return {"naam": "stemmingen", "bron": "tweedekamer.nl", "tekst": "",
+                "fout": f"de pagina met stemmingsuitslagen gaf geen antwoord ({type(fout).__name__})"}
+    regels = []
+    for blok in re.split(r'm-card__title">Stemmingsuitslagen', ruw)[1:]:
+        datum = re.search(r"<time[^>]*>([^<]{4,40})</time>", blok)
+        titel = re.search(r'data-test="kamerstuk--link"[^>]*>\s*([^<]{8,300})', blok)
+        if not titel:
+            continue
+        stuk = f"{datum.group(1).strip()}: {_kort(_schoon(titel.group(1)), 120)}" if datum else _kort(_schoon(titel.group(1)), 120)
+        regels.append(stuk)
+    if not regels:
+        return {
+            "naam": "stemmingen",
+            "bron": "tweedekamer.nl",
+            "tekst": ("Er zijn geen stemmingsuitslagen uit de pagina te lezen. Kijk zelf op "
+                      "https://www.tweedekamer.nl/kamerstukken/stemmingsuitslagen; daar staan de uitslagen "
+                      "van de laatst gehouden stemmingen en de stemmingenlijst van de komende week."),
+        }
+    return {
+        "naam": "stemmingen",
+        "bron": "tweedekamer.nl/kamerstukken/stemmingsuitslagen",
+        "tekst": (f"De laatste stemmingen in de Tweede Kamer ({len(regels)} uitslagen op de pagina): "
+                  + " | ".join(regels[:5])
+                  + ". De uitslag per fractie staat achter de link van elke stemming op tweedekamer.nl."),
+    }
+
+
+def gereedschap_staatscourant(argument: str) -> dict:
+    """De officiële bekendmakingen van de laatste dagen (Staatscourant)."""
+    vandaag = datetime.date.today()
+    treffers = []
+    for dagen in (1, 3, 7, 21):
+        begin = (vandaag - datetime.timedelta(days=dagen)).isoformat()
+        try:
+            alles = _sru(f'"staatscourant" and dt.date within "{begin} {vandaag.isoformat()}"', 40)
+        except Exception as fout:
+            return {"naam": "staatscourant", "bron": "officielebekendmakingen.nl", "tekst": "",
+                    "fout": f"de bekendmakingendienst gaf geen antwoord ({type(fout).__name__})"}
+        treffers = [stuk for stuk in alles if stuk["id"].startswith("stcrt-")]
+        if len(treffers) >= 3 or dagen == 21:
+            break
+    if not treffers:
+        return {
+            "naam": "staatscourant",
+            "bron": "officielebekendmakingen.nl",
+            "tekst": ("De laatste weken staan er geen losse Staatscourantberichten in de dienst. Kijk zelf "
+                      "op https://www.officielebekendmakingen.nl/ ; daar staan de Staatscourant, het "
+                      "Gemeenteblad en de Kamerverslagen van vandaag bij elkaar."),
+        }
+    regels = [f"{_kort(stuk['titel'], 100)}"
+              + (f" ({stuk['maker']}, {stuk['datum']})" if stuk.get("maker") else f" ({stuk['datum']})")
+              for stuk in treffers[:6]]
+    return {
+        "naam": "staatscourant",
+        "bron": "officielebekendmakingen.nl via repository.overheid.nl (Staatscourant)",
+        "tekst": ("Officiële bekendmakingen in de Staatscourant van de laatste dagen: " + " | ".join(regels)
+                  + ". De volledige teksten en de zoekfunctie staan op "
+                    "https://www.officielebekendmakingen.nl/."),
+    }
+
+
+def gereedschap_opendata_register(argument: str) -> dict:
+    """Welke datasets de overheid openbaar heeft (data.overheid.nl)."""
+    zoek = (argument or "").strip()
+    for stopwoord in ("open data", "openbare data", "datasets", "data", "register", "van", "de", "het", "over"):
+        zoek = re.sub(rf"(?i)\b{stopwoord}\b", " ", zoek)
+    zoek = " ".join(zoek.split()) or "gemeente"
+    try:
+        gegevens = _haal_json(
+            "https://data.overheid.nl/data/api/3/action/package_search?rows=6&q="
+            + urllib.parse.quote(zoek), limiet=25)
+    except Exception as fout:
+        return {"naam": "open data register", "bron": "data.overheid.nl", "tekst": "",
+                "fout": f"het dataregister gaf geen antwoord ({type(fout).__name__})"}
+    resultaat = (gegevens or {}).get("result") or {}
+    treffers = resultaat.get("results") or []
+    if not treffers:
+        return {"naam": "open data register", "bron": "data.overheid.nl", "tekst": "",
+                "fout": f"geen datasets gevonden bij '{zoek}'"}
+    regels = []
+    for stuk in treffers:
+        maker = stuk.get("organization") or {}
+        titel = _kort(_schoon(str(stuk.get("title") or "?")), 80)
+        waar = _schoon(str(maker.get("title") or "")) if isinstance(maker, dict) else ""
+        datum = str(stuk.get("metadata_modified") or "")[:10]
+        regels.append(f"{titel}" + (f" ({waar})" if waar else "") + (f" bijgewerkt {datum}" if datum else ""))
+    return {
+        "naam": "open data register",
+        "bron": f"data.overheid.nl (CKAN, {resultaat.get('count')} datasets bij '{zoek}')",
+        "tekst": (f"Open datasets van de overheid bij '{zoek}': " + " | ".join(regels)
+                  + ". Elke dataset is te vinden op https://data.overheid.nl/dataset/<naam>; de meeste "
+                    "overheidsdatasets zijn vrij te gebruiken met bronvermelding."),
+    }
+
+
+def gereedschap_eurlex(argument: str) -> dict:
+    """Europese wetten en verordeningen zoeken (EUR-Lex)."""
+    zoek = " ".join((argument or "").split()) or "verordening"
+    zoek = re.sub(r"(?i)\b(eur-?lex|europese|eu|wet|wetten|verordening|richtlijn|zoek|zoeken|een|de|het|naar|over)\b",
+                  " ", zoek).strip() or argument.strip()
+    link = "https://eur-lex.europa.eu/search.html?type=quick&text=" + urllib.parse.quote(zoek)
+    return {
+        "naam": "eur-lex",
+        "bron": "eur-lex.europa.eu",
+        "tekst": (
+            f"EUR-Lex -- de databank met alle Europese wetten, verordeningen en richtlijnen -- is niet "
+            f"automatisch te doorzoeken: de site antwoordt geautomatiseerde verzoeken met een lege "
+            f"wachtrij (status 202) en de officiële webservice vraagt een sleutel. Zoek zelf op {link} "
+            "of blader door het Publicatieblad op https://eur-lex.europa.eu/. "
+            "Weet je het CELEX-nummer van een regeling, dan is het adres "
+            "https://eur-lex.europa.eu/legal-content/NL/TXT/?uri=CELEX:<nummer>, bijvoorbeeld "
+            "https://eur-lex.europa.eu/legal-content/NL/TXT/?uri=CELEX:32016R0679 voor de privacywet. "
+            "Nederlandse wetten staan op https://wetten.overheid.nl/."
+        ),
+    }
+
+
+def gereedschap_reisadvies(argument: str) -> dict:
+    """Hoe veilig een land is om naartoe te reizen (Nederland Wereldwijd)."""
+    vraag = (argument or "").strip()
+    woorden = [w for w in re.findall(r"[A-Za-zÀ-ÿ'\-]+", vraag)
+               if w.lower() not in ("reisadvies", "reisadviezen", "kleurcode", "kleuren", "het", "de", "een",
+                                    "voor", "naar", "in", "is", "veilig", "om", "op", "van", "wat", "hoe",
+                                    "kan", "ik", "weer", "ga", "gaan", "reizen", "het", "land", "mag")]
+    land = " ".join(woorden).strip()
+    if not land:
+        return {"naam": "reisadvies", "bron": "nederlandwereldwijd.nl", "tekst": "",
+                "fout": "noem een land, bijvoorbeeld 'reisadvies Spanje'"}
+    sleutel = _nww_land(land)
+    if not sleutel:
+        return {"naam": "reisadvies", "bron": "nederlandwereldwijd.nl", "tekst": "",
+                "fout": f"ik kon '{land}' niet als land terugvinden"}
+    try:
+        ruw = _nww(f"/infotypes/countries/{sleutel}/traveladvice")
+    except Exception as fout:
+        return {"naam": "reisadvies", "bron": "nederlandwereldwijd.nl", "tekst": "",
+                "fout": f"geen reisadvies gevonden voor '{land}' ({type(fout).__name__}); "
+                        f"kijk op https://www.nederlandwereldwijd.nl/reisadvies"}
+    if "<status-code>404" in ruw:
+        return {"naam": "reisadvies", "bron": "nederlandwereldwijd.nl", "tekst": "",
+                "fout": f"voor '{land}' staat geen reisadvies op nederlandwereldwijd.nl"}
+    gevonden = ruw
+    intro = re.search(r"<introduction><!\[CDATA\[(.*?)\]\]></introduction>", gevonden, re.S)
+    link = re.search(r"<canonical>([^<]+)</canonical>", gevonden)
+    gewijzigd = re.search(r"<modificationdate>([^<]+)</modificationdate>", gevonden)
+    naam = re.search(r"<location>([^<]+)</location>", gevonden)
+    schoon = _schoon(intro.group(1)) if intro else ""
+    kleur = ""
+    treffer = re.search(r"kleurcode van het reisadvies voor ([^.]{1,60}?) is (\w+)", schoon, re.I)
+    if not treffer:
+        treffer = re.search(r"kleurcode van het reisadvies voor ([^.]{1,60}?) is (\w+)", _schoon(ruw), re.I)
+    if treffer:
+        kleur = treffer.group(2).lower()
+    betekenis = {"groen": "geen bijzondere veiligheidsrisico's",
+                 "geel": "let op: er zijn veiligheidsrisico's",
+                 "oranje": "alleen noodzakelijke reizen",
+                 "rood": "niet reizen"}.get(kleur, "")
+    tekst = f"Reisadvies {naam.group(1) if naam else land}"
+    if kleur:
+        tekst += f": kleurcode {kleur}" + (f" ({betekenis})" if betekenis else "")
+    tekst += ". " + _kort(schoon, 700)
+    if gewijzigd:
+        tekst += f" ({_schoon(gewijzigd.group(1))})"
+    if link:
+        tekst += f" Volledig advies: {link.group(1)}."
+    tekst += (" De kleurcodes lopen van groen (geen bijzonder risico) via geel en oranje naar rood "
+              "(niet reizen); zie https://www.nederlandwereldwijd.nl/reisadvies/reisadviezen-kleurcodes.")
+    return {"naam": "reisadvies", "bron": "nederlandwereldwijd.nl (ministerie van Buitenlandse Zaken)",
+            "tekst": tekst}
+
+
+def gereedschap_ambassade(argument: str) -> dict:
+    """Welke ambassade of welk consulaat bij een land hoort (Nederland Wereldwijd)."""
+    vraag = (argument or "").strip()
+    woorden = [w for w in re.findall(r"[A-Za-zÀ-ÿ'\-]+", vraag)
+               if w.lower() not in ("ambassade", "ambassades", "consulaat", "consulaten", "het", "de", "een",
+                                    "voor", "in", "van", "welke", "welk", "bij", "hoort", "nederlandse",
+                                    "nederlands", "is", "er", "en")]
+    land = " ".join(woorden).strip()
+    if not land:
+        return {"naam": "ambassade", "bron": "nederlandwereldwijd.nl", "tekst": "",
+                "fout": "noem een land, bijvoorbeeld 'ambassade in Spanje'"}
+    sleutel = _nww_land(land)
+    if not sleutel:
+        return {"naam": "ambassade", "bron": "nederlandwereldwijd.nl", "tekst": "",
+                "fout": f"ik kon '{land}' niet als land terugvinden"}
+    try:
+        ruw = _nww(f"/infotypes/countries/{sleutel}/nl-representation")
+    except Exception as fout:
+        return {"naam": "ambassade", "bron": "nederlandwereldwijd.nl", "tekst": "",
+                "fout": f"geen vertegenwoordiging gevonden voor '{land}' ({type(fout).__name__}); "
+                        f"kijk op https://www.nederlandwereldwijd.nl/contact"}
+    if "<status-code>404" in ruw:
+        return {"naam": "ambassade", "bron": "nederlandwereldwijd.nl", "tekst": "",
+                "fout": f"geen Nederlandse vertegenwoordiging gevonden voor '{land}'"}
+    posten = []
+    for blok in re.findall(r"<document>(.*?)</document>", ruw, re.S):
+        titel = re.search(r"<title>([^<]*)</title>", blok)
+        link = re.search(r"<canonical>([^<]*)</canonical>", blok)
+        if titel and link:
+            posten.append((_schoon(titel.group(1)), link.group(1).strip()))
+    if not posten:
+        return {"naam": "ambassade", "bron": "nederlandwereldwijd.nl", "tekst": "",
+                "fout": f"geen posten gevonden voor '{land}'"}
+    posten.sort(key=lambda stuk: (0 if "ambassade" in stuk[0].lower() else 1, stuk[0]))
+    regels = [f"{titel} ({link})" for titel, link in posten[:6]]
+    return {
+        "naam": "ambassade",
+        "bron": f"nederlandwereldwijd.nl (opendata, {len(posten)} posten)",
+        "tekst": (f"Nederlandse vertegenwoordigingen voor {land}: " + " | ".join(regels)
+                  + ". Adressen, telefoonnummers en openingstijden staan achter de link; voor nood buiten "
+                    "kantooruren is er het centrale nummer van Buitenlandse Zaken, te vinden op "
+                    "https://www.nederlandwereldwijd.nl/."),
+    }
+
+
+def gereedschap_oorlogsbronnen(argument: str) -> dict:
+    """Documenten over de Tweede Wereldoorlog zoeken (Oorlogsbronnen)."""
+    zoek = " ".join((argument or "").split())
+    zoek = re.sub(r"(?i)\b(oorlogsbronnen|tweede wereldoorlog|wo2|documenten|zoek|zoeken|over|de|het|een|in)\b",
+                  " ", zoek).strip()
+    waar = f" over {zoek}" if zoek else ""
+    return {
+        "naam": "oorlogsbronnen",
+        "bron": "oorlogsbronnen.nl",
+        "tekst": (
+            f"Oorlogsbronnen -- de zoekdienst over de Tweede Wereldoorlog met miljoenen foto's, brieven, "
+            f"kranten en persoonsdossiers -- heeft geen werkende open interface: het zoekadres antwoordt "
+            f"geautomatiseerde verzoeken met een lege wachtrij (status 202). Zoek zelf{waar} op "
+            "https://www.oorlogsbronnen.nl/ ; daar zit ook de zoekbalk waarmee je op persoon, plaats of "
+            "gebeurtenis kunt zoeken. Verwant zijn het Nationaal Archief "
+            "(https://www.nationaalarchief.nl/) en de Oorlogsbronnen-schatkamer van het NIOD."
+        ),
+    }
+
+
+def gereedschap_archief(argument: str) -> dict:
+    """Stukken in het Nationaal Archief zoeken."""
+    zoek = " ".join((argument or "").split())
+    zoek = re.sub(r"(?i)\b(nationaal archief|archief|archieven|zoek|zoeken|stukken|documenten|in|het|de|een|over|naar)\b",
+                  " ", zoek).strip()
+    link = ("https://www.nationaalarchief.nl/onderzoeken/zoeken"
+            + (f"?search_term={urllib.parse.quote(zoek)}" if zoek else ""))
+    return {
+        "naam": "archief",
+        "bron": "nationaalarchief.nl",
+        "tekst": (
+            f"Het Nationaal Archief heeft geen open zoekinterface voor andere programma's: de zoekpagina "
+            f"bouwt de resultaten in de browser op. Zoek zelf{(' naar ' + zoek) if zoek else ''} op {link} . "
+            "Daar vind je de archieven van het Rijk, de provincies en de grote instellingen, en de "
+            "indexen van het Centraal Archief Bijzondere Rechtspleging. "
+            "Regionale archieven en genealogische bronnen (geboorte-, huwelijks- en overlijdensakten) staan "
+            "op https://www.archieven.nl/ en op https://www.openarchieven.nl/. "
+            "Verwante diensten: https://www.oorlogsbronnen.nl/ (Tweede Wereldoorlog) en "
+            "https://www.delpher.nl/ (kranten en boeken van de KB)."
+        ),
+    }
+
+
+def gereedschap_paspoort(argument: str) -> dict:
+    """Wat je nodig hebt voor een paspoort of identiteitskaart (Rijksoverheid)."""
+    aanvraag = ""
+    try:
+        ruw = _haal("https://www.rijksoverheid.nl/onderwerpen/paspoort-en-identiteitskaart", limiet=20).decode("utf-8", "replace")
+        schoon = _schoon(re.sub(r"<script.*?</script>|<style.*?</style>", " ", ruw, flags=re.S))
+        treffer = re.search(r"(Checklist[^|]{0,120}?)(?:Paspoort|Identiteitskaart|$)", schoon)
+        if treffer:
+            aanvraag = _kort(treffer.group(1), 140) + ". "
+    except Exception:
+        aanvraag = ""
+    return {
+        "naam": "paspoort",
+        "bron": "rijksoverheid.nl (onderwerp paspoort en identiteitskaart)",
+        "tekst": (
+            "Voor een paspoort of Nederlandse identiteitskaart maak je een afspraak bij de gemeente waar je "
+            "staat ingeschreven; bij een spoedaanvraag kan het sneller en soms op een ander loket. Je neemt "
+            "een pasfoto mee die aan de eisen voldoet (staand, neutraal, zonder hoofddeksel) en je huidige "
+            "paspoort of ID-kaart. Een paspoort en een ID-kaart voor volwassenen zijn tien jaar geldig, voor "
+            "kinderen tot achttien jaar vijf jaar. De kosten verschillen per gemeente en liggen hoger bij "
+            "spoed; wat jouw gemeente rekent staat op de site van de gemeente. Voor een kind onder de "
+            "achttien jaar moeten beide ouders met gezag meekomen of schriftelijk toestemming geven. "
+            + aanvraag +
+            "De officiële uitleg staat op "
+            "https://www.rijksoverheid.nl/onderwerpen/paspoort-en-identiteitskaart; die pagina vult zich in "
+            "de browser, daarom kan de engine de details niet zelf voorlezen."
+        ),
+    }
+
+
+def gereedschap_uittreksel(argument: str) -> dict:
+    """Een uittreksel van de burgerlijke stand of het BRP aanvragen."""
+    return {
+        "naam": "uittreksel",
+        "bron": "rijksoverheid.nl (persoonsgegevens en burgerlijke stand)",
+        "tekst": (
+            "Er zijn twee soorten uittreksels. Het uittreksel basisregistratie personen (BRP, vroeger "
+            "uittreksel GBA) is een bewijs van inschrijving: je vraagt het aan bij je eigen gemeente en het "
+            "wordt onder meer gevraagd door werkgevers, verhuurders en banken. Een uittreksel of afschrift "
+            "uit de burgerlijke stand (geboorte-, huwelijks- of overlijdensakte) vraag je aan bij de gemeente "
+            "waar de akte is opgemaakt; sinds 2014 kan dat bij elke gemeente in Nederland, en via "
+            "https://www.rijksoverheid.nl/onderwerpen/persoonsgegevens zie je hoe het precies werkt. "
+            "Gemeenten rekenen leges: wat het kost en hoe lang het duurt verschilt per gemeente, en voor "
+            "gebruik in het buitenland is vaak een apostille of legalisatie nodig. Op de pagina's van "
+            "Rijksoverheid vult de uitleg zich in de browser, daarom kan de engine de details niet zelf "
+            "oplezen."
+        ),
+    }
+
+
+def gereedschap_verkiezingen_aankomend(argument: str) -> dict:
+    """Wanneer je mag stemmen en waarvoor (Kiesraad)."""
+    soorten = []
+    try:
+        ruw = _haal("https://www.kiesraad.nl/verkiezingen", limiet=20).decode("utf-8", "replace")
+        schoon = _schoon(ruw)
+        for treffer in re.findall(
+                r"(Tweede Kamerverkiezing|Gemeenteraadsverkiezingen|Europees Parlementsverkiezing|"
+                r"Provinciale Statenverkiezingen|Waterschapsverkiezingen|Eerste Kamerverkiezing|"
+                r"Kiescolleges|Eilandsraden|Herindelingsverkiezingen|Raadgevend referendum)", schoon):
+            if treffer not in soorten:
+                soorten.append(treffer)
+    except Exception:
+        soorten = []
+    titels = _nieuwsfeed("verkiezingen stembureau kiesraad datum", "verkiezingen", 5)
+    tekst = "Verkiezingen in Nederland"
+    if soorten:
+        tekst += " gaan over: " + ", ".join(soorten[:8]) + "."
+    else:
+        tekst += " gaan over de Tweede Kamer, de gemeenteraden, de Provinciale Staten, de waterschappen, " \
+                 "het Europees Parlement en de Eerste Kamer."
+    tekst += (" Wanneer je mag stemmen bepaalt de Kiesraad met de verkiezingskalender; de Kiesraad zet de "
+              "data en de uitslagen op https://www.kiesraad.nl/verkiezingen. Je stemt in het stemlokaal in "
+              "je eigen gemeente met je stempas, die je minstens twee weken voor de verkiezing per post "
+              "krijgt; mag je niet komen, dan kun je iemand anders met je volmacht laten stemmen. "
+              "De Kiesraad geeft de datum van de eerstvolgende verkiezing niet als open data uit, dus check "
+              "de exacte datum op kiesraad.nl of bij je gemeente.")
+    if titels:
+        tekst += " Wat er in het nieuws is over de verkiezingen: " + " | ".join(titels) + "."
+    return {
+        "naam": "aankomende verkiezingen",
+        "bron": "kiesraad.nl (via Google Nieuws voor het laatste nieuws)",
+        "tekst": tekst,
+    }
+
+# ---- M. kennis en taal
+
+# Woordenboek- en wikibronnen leveren rommelige wikitekst. Deze hulpen halen
+# het sjabloonblok eruit en maken er leesbare taal van; lukt dat niet, dan
+# zeggen we dat eerlijk met de link naar de pagina erbij.
+
+TAALNAMEN = {
+    "dum": "Middelnederlands", "odt": "Oudnederlands", "gmh": "Middelhoogduits",
+    "goh": "Oudhoogduits", "enm": "Middelengels", "ang": "Oudengels",
+    "fra": "Frans", "eng": "Engels", "deu": "Duits", "lat": "Latijn",
+    "grc": "Oudgrieks", "spa": "Spaans", "ita": "Italiaans", "pt": "Portugees",
+    "swe": "Zweeds", "dan": "Deens", "heb": "Hebreeuws", "ara": "Arabisch",
+}
+ETYM_WOORDEN = ("klanknabootsing", "eponiem", "leenwoord", "leenvertaling",
+                "verkleinwoord", "afkorting", "letterwoord", "samenstelling",
+                "verbastering", "verkorting", "volksetymologie")
+
+
+def _wt_sjabloon(stuk: str) -> str:
+    """Eén wikisjabloon vervangen door leesbare tekst of door niets."""
+    delen = [deel.strip() for deel in (stuk or "").split("|")]
+    naam = (delen[0] if delen else "").strip().lower()
+    if naam in TAALNAMEN:
+        return TAALNAMEN[naam]
+    if naam in ("q", "quote", "citeer", "citaat") and len(delen) > 1:
+        return f"'{delen[1].strip()}'"
+    if naam in ETYM_WOORDEN:
+        return naam
+    if naam in ("pn", "PAGENAME", "pagename"):
+        return " "
+    return " "
+
+
+def _wt_schoon(ruw: str) -> str:
+    """Sjablonen, verwijzingen en linkjes uit een stuk wikitekst halen."""
+    uit = ruw or ""
+    uit = re.sub(r"<ref[^>]*/>", "", uit)
+    uit = re.sub(r"<ref[^>]*>.*?</ref>", "", uit, flags=re.S)
+    uit = re.sub(r"<!--.*?-->", "", uit, flags=re.S)
+    for _ in range(4):
+        uit = re.sub(r"\{\{([^{}]*)\}\}", lambda stuk: _wt_sjabloon(stuk.group(1)), uit)
+    uit = re.sub(r"\{\{[^{}]*$", " ", uit)
+    uit = uit.replace("&nbsp;", " ")
+    uit = re.sub(r"\[\[[^\]|]*\|([^\]]*)\]\]", r"\1", uit)
+    uit = re.sub(r"\[\[([^\]]*)\]\]", r"\1", uit)
+    uit = re.sub(r"\[(?:https?|ftp)://\S+\s+([^\]]*)\]", r"\1", uit)
+    uit = re.sub(r"\[(?:https?|ftp)://\S+\]", " ", uit)
+    uit = uit.replace("'''", "").replace("''", "")
+    uit = re.sub(r"\s+([,.;:!?])", r"\1", uit)
+    return _schoon(uit)
+
+
+def _wt_blok(tekst: str, naam: str) -> str:
+    """Het stuk tekst tussen {{-naam-}} en het volgende kopje-sjabloon."""
+    gevonden = re.search(r"\{\{-" + re.escape(naam) + r"-(?:\|[^}]*)?\}\}(.*?)(?=\{\{-|\Z)",
+                         tekst or "", re.S)
+    return gevonden.group(1) if gevonden else ""
+
+
+def _wt_paginas(gegevens: dict) -> dict:
+    """Titel naar wikitekst uit een API-antwoord met prop=revisions."""
+    uit = {}
+    paginas = ((gegevens or {}).get("query") or {}).get("pages") or {}
+    for pagina in paginas.values():
+        try:
+            uit[str(pagina.get("title") or "")] = str(pagina["revisions"][0]["slots"]["main"]["*"])
+        except (KeyError, IndexError, TypeError):
+            continue
+    return uit
+
+
+def _wt_haal(*titels: str) -> dict:
+    """De wikitekst van één of meer WikiWoordenboek-pagina's ophalen."""
+    adres = ("https://nl.wiktionary.org/w/api.php?action=query&format=json&prop=revisions"
+             "&rvprop=content&rvslots=main&redirects=1&titles="
+             + urllib.parse.quote("|".join(titels)))
+    return _wt_paginas(_haal_json(adres))
+
+
+def _wiki_haal(*titels: str, domein: str = "nl.wikipedia.org") -> dict:
+    """De wikitekst van één of meer Wikipedia-pagina's ophalen."""
+    adres = (f"https://{domein}/w/api.php?action=query&format=json&prop=revisions"
+             "&rvprop=content&rvslots=main&redirects=1&titles="
+             + urllib.parse.quote("|".join(titels)))
+    return _wt_paginas(_haal_json(adres))
+
+
+VRAAGWOORDEN = {
+    "de", "het", "een", "van", "is", "was", "wat", "welk", "welke", "hoe", "hoeveel", "waar",
+    "komt", "kom", "vandaan", "woord", "woorden", "betekent", "betekenis", "zeg", "zegt",
+    "je", "mij", "me", "eens", "even", "kun", "kan", "kunt", "jij", "ik", "mijn", "ons",
+    "nederlands", "nederlandse", "taal", "graag", "als", "en", "of", "in", "op", "met",
+}
+
+
+def _woord_uit(argument: str, extra: tuple = ()) -> str:
+    """Het laatste echte woord van een vraag, zonder vraagwoorden en leestekens."""
+    stopwoorden = VRAAGWOORDEN | set(extra)
+    stukken = [stuk for stuk in re.findall(r"[A-Za-zÀ-ÿ'’-]+", argument or "")
+               if stuk.lower() not in stopwoorden]
+    if not stukken:
+        stukken = re.findall(r"[A-Za-zÀ-ÿ'’-]+", argument or "")
+    return stukken[-1].strip("-'’").lower() if stukken else ""
+
+
+def gereedschap_etymologie(argument: str) -> dict:
+    """Waar een woord vandaan komt (WikiWoordenboek)."""
+    woord = _woord_uit(argument, ("etymologie", "etymologisch", "herkomst", "afkomst", "oorsprong"))
+    if not woord:
+        return {"naam": "etymologie", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": "noem een woord, bijvoorbeeld 'waar komt fiets vandaan'"}
+    try:
+        paginas = _wt_haal(woord)
+    except Exception as fout:
+        return {"naam": "etymologie", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": f"woordenboek niet bereikbaar ({type(fout).__name__})"}
+    ruw = next(iter(paginas.values()), "")
+    if not ruw:
+        return {"naam": "etymologie", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": f"geen lemma gevonden voor '{woord}'"}
+    blok = _wt_blok(ruw, "etym")
+    regels = []
+    for regel in blok.split("\n"):
+        schoon = _wt_schoon(re.sub(r"^[#*:;]+", "", regel)).strip(" ,;")
+        if len(schoon) < 15 or schoon in regels:
+            continue
+        regels.append(schoon)
+    if not regels:
+        return {"naam": "etymologie", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": f"de pagina van '{woord}' heeft geen leesbare etymologie; "
+                        f"bekijk https://nl.wiktionary.org/wiki/{urllib.parse.quote(woord)}"}
+    return {
+        "naam": "etymologie",
+        "bron": f"nl.wiktionary.org/wiki/{urllib.parse.quote(woord)}",
+        "tekst": f"Herkomst van '{woord}': " + _kort(" ".join(regels[:4]), 620),
+    }
+
+
+def gereedschap_lidwoord(argument: str) -> dict:
+    """Welk lidwoord bij een woord hoort: de of het (WikiWoordenboek)."""
+    woord = _woord_uit(argument)
+    if not woord:
+        return {"naam": "de of het", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": "noem een woord, bijvoorbeeld 'is het de of het huis'"}
+    try:
+        paginas = _wt_haal(woord)
+    except Exception as fout:
+        return {"naam": "de of het", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": f"woordenboek niet bereikbaar ({type(fout).__name__})"}
+    ruw = next(iter(paginas.values()), "")
+    if not ruw:
+        return {"naam": "de of het", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": f"geen lemma gevonden voor '{woord}'"}
+    geslachten = re.findall(r"\{\{-l-\|([^}]*)\}\}", ruw)
+    letters = "".join(geslachten).lower().strip()
+    if letters:
+        if "n" in letters and "m" not in letters and "f" not in letters and "v" not in letters:
+            oordeel = f"het {woord} (onzijdig)"
+        elif "n" in letters and ("m" in letters or "f" in letters or "v" in letters):
+            oordeel = f"zowel de als het {woord} (het woordenboek geeft meer dan één geslacht)"
+        elif "p" in letters or "mv" in letters:
+            oordeel = f"de {woord} (meervoud, geen enkelvoud)"
+        else:
+            oordeel = f"de {woord} (mannelijk of vrouwelijk)"
+        return {
+            "naam": "de of het",
+            "bron": f"nl.wiktionary.org/wiki/{urllib.parse.quote(woord)}",
+            "tekst": f"Volgens het WikiWoordenboek: {oordeel}.",
+        }
+    # geen geslacht in het lemma: vuistregel, met de eerlijke waarschuwing erbij
+    if re.search(r"(je|tje|etje|pje|kje)$", woord):
+        gok = f"het {woord} (verkleinwoorden zijn altijd het)"
+    elif re.search(r"(ing|heid|teit|atie|ie|ij|nis|st|de|te)$", woord):
+        gok = f"de {woord} (woorden op -ing, -heid, -teit, -atie, -ie, -ij zijn meestal de)"
+    elif re.search(r"(ment|um|ium|isme|sel)$", woord):
+        gok = f"het {woord} (woorden op -ment, -um, -isme, -sel zijn meestal het)"
+    else:
+        gok = f"de {woord} (de meeste zelfstandige naamwoorden zijn de)"
+    return {
+        "naam": "de of het",
+        "bron": f"nl.wiktionary.org/wiki/{urllib.parse.quote(woord)} (geen geslacht vermeld)",
+        "tekst": f"Op de pagina van '{woord}' staat geen geslacht. Vuistregel: {gok} — "
+                 f"zeker weten: https://nl.wiktionary.org/wiki/{urllib.parse.quote(woord)}",
+    }
+
+
+def _wt_nlnoun(ruw: str, woord: str) -> list:
+    """De vormen uit het {{-nlnoun-}}-sjabloon: enkelvoud, meervoud, verkleinwoord."""
+    uit = []
+    for gevonden in re.finditer(r"\{\{-nlnoun-\|", ruw or ""):
+        regel = (ruw or "")[gevonden.end():].split("\n")[0]
+        if "}}" in regel:
+            regel = regel[:regel.rindex("}}")]
+        vormen = []
+        for deel in regel.split("|"):
+            if "=" in deel:
+                continue
+            deel = deel.replace("{{pn}}", woord).replace("{{PAGENAME}}", woord)
+            deel = re.sub(r"\[\d+\]", "", deel)
+            deel = re.sub(r"\[\[[^\]|]*\|([^\]]*)\]\]", r"\1", deel)
+            deel = re.sub(r"\[\[([^\]]*)\]\]", r"\1", deel)
+            deel = _schoon(re.sub(r"<[^>]+>", " ", deel))
+            if deel and deel != "-":
+                vormen.append(deel)
+        if len(vormen) >= 2:
+            uit.append(vormen)
+    return uit
+
+
+def gereedschap_meervoud(argument: str) -> dict:
+    """Het meervoud en het verkleinwoord van een woord (WikiWoordenboek)."""
+    woord = _woord_uit(argument)
+    if not woord:
+        return {"naam": "meervoud", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": "noem een woord, bijvoorbeeld 'wat is het meervoud van huis'"}
+    try:
+        paginas = _wt_haal(woord)
+    except Exception as fout:
+        return {"naam": "meervoud", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": f"woordenboek niet bereikbaar ({type(fout).__name__})"}
+    ruw = next(iter(paginas.values()), "")
+    if not ruw:
+        return {"naam": "meervoud", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": f"geen lemma gevonden voor '{woord}'"}
+    vormen = _wt_nlnoun(ruw, woord)
+    if not vormen:
+        return {"naam": "meervoud", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": f"op de pagina van '{woord}' staat geen zelfstandig naamwoord met "
+                        f"meervoud; bekijk https://nl.wiktionary.org/wiki/{urllib.parse.quote(woord)}"}
+    stukken = []
+    for rij in vormen[:2]:
+        deel = f"meervoud {rij[1]}"
+        if len(rij) > 2:
+            deel += f", verkleinwoord {rij[2]}"
+        if len(rij) > 3:
+            deel += f", verkleinwoord meervoud {rij[3]}"
+        stukken.append(deel)
+    return {
+        "naam": "meervoud",
+        "bron": f"nl.wiktionary.org/wiki/{urllib.parse.quote(woord)}",
+        "tekst": f"{woord}: " + "; ".join(stukken) + ".",
+    }
+
+
+ANAGRAM_CACHE: dict = {"index": None}
+
+
+def _anagram_index() -> dict:
+    """Alle woorden uit de OpenTaal-lijst op hun gesorteerde letters."""
+    if ANAGRAM_CACHE["index"] is not None:
+        return ANAGRAM_CACHE["index"]
+    woordenlijst = _woordenlijst()
+    index: dict = {}
+    for stuk in woordenlijst:
+        if len(stuk) < 3 or " " in stuk or "-" in stuk or "'" in stuk:
+            continue
+        index.setdefault("".join(sorted(stuk)), []).append(stuk)
+    ANAGRAM_CACHE["index"] = index
+    return index
+
+
+def gereedschap_anagrammen(argument: str) -> dict:
+    """Woorden die je van dezelfde letters kunt maken (OpenTaal-lijst, zonder internet)."""
+    woord = _woord_uit(argument)
+    if len(woord) < 3:
+        return {"naam": "anagrammen", "bron": "OpenTaal-woordenlijst", "tekst": "",
+                "fout": "noem een woord van minstens drie letters, bijvoorbeeld 'anagram van fiets'"}
+    try:
+        index = _anagram_index()
+    except Exception as fout:
+        return {"naam": "anagrammen", "bron": "OpenTaal-woordenlijst", "tekst": "",
+                "fout": f"woordenlijst niet op te halen ({type(fout).__name__})"}
+    gevonden = sorted(
+        (stuk for stuk in index.get("".join(sorted(woord)), []) if stuk != woord),
+        key=lambda stuk: (-len(stuk), stuk),
+    )
+    if not gevonden:
+        return {"naam": "anagrammen", "bron": "OpenTaal-woordenlijst", "tekst": "",
+                "fout": f"geen ander woord met precies de letters van '{woord}' in de lijst"}
+    return {
+        "naam": "anagrammen",
+        "bron": f"OpenTaal-woordenlijst ({len(index)} lettercombinaties)",
+        "tekst": (f"Anagrammen van '{woord}' (exact dezelfde letters, uit de woordenlijst): "
+                  + ", ".join(gevonden[:15]) + "."),
+    }
+
+
+def _lettergrepen_gok(woord: str) -> list:
+    """Vuistregel voor woordafbreking: klinker-medeklinker-klinker splitst voor de medeklinker."""
+    klinkers = "aeiouyáéíóúäëïöüèéêôâûî"
+    laag = woord.lower()
+    klanken = list(laag)
+    knippen = []
+    for i in range(1, len(laag) - 1):
+        if klanken[i] in klinkers or klanken[i - 1] not in klinkers:
+            continue
+        j = i
+        while j < len(laag) and klanken[j] not in klinkers:
+            j += 1
+        if j >= len(laag) or j == i:
+            continue
+        cluster = laag[i:j]
+        if len(cluster) == 1:
+            knippen.append(i)
+        elif len(cluster) == 2 and cluster not in ("ch", "ng", "sj", "tj"):
+            knippen.append(i + 1)
+        elif len(cluster) >= 3:
+            knippen.append(i + 1)
+    stukken, vorige = [], 0
+    for plek in knippen:
+        if plek > vorige:
+            stukken.append(woord[vorige:plek])
+            vorige = plek
+    stukken.append(woord[vorige:])
+    return [stuk for stuk in stukken if stuk]
+
+
+def gereedschap_lettergrepen(argument: str) -> dict:
+    """Een woord in lettergrepen verdelen (WikiWoordenboek, anders een vuistregel)."""
+    woord = _woord_uit(argument)
+    if len(woord) < 2:
+        return {"naam": "lettergrepen", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": "noem een woord, bijvoorbeeld 'hoeveel lettergrepen heeft koningin'"}
+    ruw = ""
+    try:
+        ruw = next(iter(_wt_haal(woord).values()), "")
+    except Exception:
+        ruw = ""
+    blok = _wt_blok(ruw, "syll")
+    if blok:
+        regel = next((stuk.strip(" *") for stuk in blok.split("\n") if stuk.strip(" *")), "")
+        sjabloon = re.search(r"\{\{syll\|([^}]*)\}\}", regel)
+        if sjabloon:
+            delen = [stuk.strip() for stuk in sjabloon.group(1).split("|") if stuk.strip()]
+        else:
+            delen = [stuk.strip() for stuk in regel.split("·") if stuk.strip()]
+        if len(delen) >= 1 and "".join(delen).lower() == woord.replace(" ", "").lower():
+            return {
+                "naam": "lettergrepen",
+                "bron": f"nl.wiktionary.org/wiki/{urllib.parse.quote(woord)}",
+                "tekst": (f"{woord} heeft {len(delen)} "
+                          f"{'lettergreep' if len(delen) == 1 else 'lettergrepen'}: "
+                          + "-".join(delen) + "."),
+            }
+    if not ruw:
+        return {"naam": "lettergrepen", "bron": "eigen vuistregel", "tekst": "",
+                "fout": f"'{woord}' staat niet in het WikiWoordenboek"}
+    stukken = _lettergrepen_gok(woord)
+    return {
+        "naam": "lettergrepen",
+        "bron": "eigen vuistregel (het WikiWoordenboek gaf voor dit woord geen afbreking)",
+        "tekst": (f"{woord} in lettergrepen: " + "-".join(stukken) + f" ({len(stukken)}). "
+                  "Vuistregel: tussen twee klinkers begint een nieuwe lettergreep voor een "
+                  "enkele medeklinker, en tussen twee medeklinkers in het midden."),
+    }
+
+
+SPREEKWOORD_CATEGORIE = "Categorie:Spreekwoord_in_het_Nederlands"
+
+
+def _spreekwoord_betekenis(ruw: str) -> str:
+    """De betekenisregel uit een spreekwoordpagina halen."""
+    blok = _wt_blok(ruw, "phrase")
+    for regel in blok.split("\n"):
+        if not regel.strip().startswith("#"):
+            continue
+        schoon = _wt_schoon(regel.lstrip("#*: ")).strip(" ,;")
+        if len(schoon) > 8:
+            eerste = re.split(r"(?<=[a-z)])\.\s", schoon)[0]
+            return _kort(eerste if len(eerste) > 12 else schoon, 220)
+    for regel in blok.split("\n"):
+        schoon = _wt_schoon(regel).strip(" ,;")
+        if len(schoon) > 8 and schoon.lower() != "nld":
+            return _kort(schoon, 220)
+    return ""
+
+
+def gereedschap_spreekwoorden(argument: str) -> dict:
+    """Wat een spreekwoord betekent (WikiWoordenboek)."""
+    zoek = (argument or "").strip()
+    zoek = re.sub(r"^(wat )?betekent (het spreekwoord |het gezegde |het spreekwoord: )?", "", zoek, flags=re.I)
+    zoek = re.sub(r"^(het spreekwoord|spreekwoord|gezegde|betekenis van het spreekwoord)\s*", "", zoek, flags=re.I)
+    zoek = zoek.strip(" :?\"")
+    bron = f"nl.wiktionary.org ({SPREEKWOORD_CATEGORIE.replace('_', ' ')})"
+    try:
+        if zoek:
+            kandidaten = [zoek]
+            leden = _haal_json(
+                "https://nl.wiktionary.org/w/api.php?action=query&format=json&list=categorymembers"
+                f"&cmtitle={urllib.parse.quote(SPREEKWOORD_CATEGORIE)}&cmlimit=50"
+            )
+            titels = [str(stuk.get("title") or "")
+                      for stuk in ((leden or {}).get("query") or {}).get("categorymembers") or []]
+            woorden = [stuk for stuk in re.findall(r"[a-z]+", zoek.lower()) if len(stuk) > 2]
+            if woorden:
+                beste, score = "", 0
+                for titel in titels:
+                    laag = titel.lower()
+                    aantal = sum(1 for stuk in woorden if stuk in laag)
+                    if aantal > score or (aantal == score and beste and len(titel) < len(beste)):
+                        beste, score = titel, aantal
+                if score >= max(2, (len(woorden) + 1) // 2):
+                    kandidaten.append(beste)
+            paginas = _wt_haal(*dict.fromkeys(kandidaten))
+            ruw = ""
+            for titel in kandidaten:
+                for gevonden_titel, tekst in paginas.items():
+                    if gevonden_titel.lower() == titel.lower() and "-phrase-" in tekst:
+                        ruw = tekst
+                        break
+                if ruw:
+                    break
+        else:
+            leden = _haal_json(
+                "https://nl.wiktionary.org/w/api.php?action=query&format=json&list=categorymembers"
+                f"&cmtitle={urllib.parse.quote(SPREEKWOORD_CATEGORIE)}&cmlimit=50"
+            )
+            titels = [str(stuk.get("title") or "")
+                      for stuk in ((leden or {}).get("query") or {}).get("categorymembers") or []]
+            if not titels:
+                return {"naam": "spreekwoorden", "bron": bron, "tekst": "",
+                        "fout": "de categorie met Nederlandse spreekwoorden gaf geen woorden terug"}
+            keuze = [titels[0], titels[len(titels) // 2], titels[-1]]
+            if len(titels) > 6:
+                keuze = [titels[1], titels[len(titels) // 3], titels[-2]]
+            paginas = _wt_haal(*keuze)
+            regels = []
+            for titel in keuze:
+                for gevonden_titel, tekst in paginas.items():
+                    if gevonden_titel.lower() != titel.lower():
+                        continue
+                    betekenis = _spreekwoord_betekenis(tekst)
+                    regels.append(f"{titel} — {betekenis}" if betekenis else titel)
+            if not regels:
+                return {"naam": "spreekwoorden", "bron": bron, "tekst": "",
+                        "fout": "geen leesbare spreekwoorden gevonden in de categorie"}
+            return {"naam": "spreekwoorden", "bron": bron,
+                    "tekst": "Spreekwoorden: " + " | ".join(regels)}
+    except Exception as fout:
+        return {"naam": "spreekwoorden", "bron": "nl.wiktionary.org", "tekst": "",
+                "fout": f"woordenboek niet bereikbaar ({type(fout).__name__})"}
+    if not ruw:
+        return {"naam": "spreekwoorden", "bron": bron, "tekst": "",
+                "fout": f"geen spreekwoord gevonden dat bij '{zoek}' past; "
+                        f"bekijk https://nl.wiktionary.org/wiki/{SPREEKWOORD_CATEGORIE}"}
+    titel = next((titel for titel, tekst in paginas.items() if tekst == ruw), zoek)
+    betekenis = _spreekwoord_betekenis(ruw)
+    if not betekenis:
+        return {"naam": "spreekwoorden", "bron": bron, "tekst": "",
+                "fout": f"van '{titel}' staat de betekenis niet leesbaar op de pagina; "
+                        f"bekijk https://nl.wiktionary.org/wiki/{urllib.parse.quote(titel)}"}
+    return {"naam": "spreekwoorden", "bron": f"nl.wiktionary.org/wiki/{urllib.parse.quote(titel)}",
+            "tekst": f"{titel}: {betekenis}."}
+
+
+def gereedschap_citaten_persoon(argument: str) -> dict:
+    """Wat iemand zelf gezegd heeft (Wikiquote)."""
+    naam = (argument or "").strip().strip('"')
+    for voorzetsel in ("citaten van", "uitspraken van", "wat heeft", "wat zei", "quotes van"):
+        if naam.lower().startswith(voorzetsel):
+            naam = naam[len(voorzetsel):].strip()
+    for staart in (" gezegd", " gezegd heeft", " gezegd?"):
+        if naam.lower().endswith(staart):
+            naam = naam[: -len(staart)].strip()
+    if not naam:
+        return {"naam": "citaten van een persoon", "bron": "nl.wikiquote.org", "tekst": "",
+                "fout": "noem een persoon, bijvoorbeeld 'citaten van Johan Cruijff'"}
+    try:
+        paginas = _wiki_haal(naam, domein="nl.wikiquote.org")
+    except Exception as fout:
+        return {"naam": "citaten van een persoon", "bron": "nl.wikiquote.org", "tekst": "",
+                "fout": f"wikiquote niet bereikbaar ({type(fout).__name__})"}
+    ruw = next(iter(paginas.values()), "")
+    if not ruw:
+        treffers = ""
+        try:
+            gegevens = _haal_json(
+                "https://nl.wikiquote.org/w/api.php?action=query&format=json&list=search"
+                f"&srlimit=4&srsearch={urllib.parse.quote(naam)}"
+            )
+            treffers = ", ".join(str(stuk.get("title") or "")
+                                 for stuk in ((gegevens or {}).get("query") or {}).get("search") or [])
+        except Exception:
+            treffers = ""
+        return {"naam": "citaten van een persoon", "bron": "nl.wikiquote.org", "tekst": "",
+                "fout": f"geen pagina over '{naam}' op Wikiquote" + (f" (wel: {treffers})" if treffers else "")}
+    citaten = []
+    for blok in re.findall(r"\{\{(?:vertaald )?[Cc]itaat\b(.*?)\}\}\s*(?=\n|$)", ruw, re.S):
+        gezegd = re.search(r"\|\s*tekst\s*=\s*(.*?)(?=\n\s*\||\Z)", blok, re.S)
+        if not gezegd:
+            continue
+        schoon = _wt_schoon(gezegd.group(1))
+        schoon = re.sub(r"\s*\[[^\]]*\]\s*$", "", schoon).strip(" ,;.")
+        if len(schoon) > 25 and schoon not in citaten:
+            citaten.append(schoon)
+    if not citaten:
+        return {"naam": "citaten van een persoon", "bron": "nl.wikiquote.org", "tekst": "",
+                "fout": f"op de pagina van '{naam}' staan geen leesbare citaten; "
+                        f"bekijk https://nl.wikiquote.org/wiki/{urllib.parse.quote(naam)}"}
+    return {
+        "naam": "citaten van een persoon",
+        "bron": f"nl.wikiquote.org/wiki/{urllib.parse.quote(naam)}",
+        "tekst": f"Citaten van {naam}: " + " | ".join(f"'{_kort(stuk, 220)}'" for stuk in citaten[:3]),
+    }
+
+
+def gereedschap_liedteksten(argument: str) -> dict:
+    """De tekst van een lied opzoeken (lyrics.ovh)."""
+    ruw = (argument or "").strip()
+    if not ruw:
+        return {"naam": "liedteksten", "bron": "lyrics.ovh", "tekst": "",
+                "fout": "noem een artiest en een titel, bijvoorbeeld 'Coldplay - Yellow'"}
+    if " - " in ruw:
+        artiest, _, titel = ruw.partition(" - ")
+    elif " van " in ruw.lower():
+        voor, _, na = ruw.rpartition(" van ")
+        titel, artiest = voor.strip(), na.strip()
+    else:
+        return {"naam": "liedteksten", "bron": "lyrics.ovh", "tekst": "",
+                "fout": "zet een streepje tussen artiest en titel, bijvoorbeeld 'Coldplay - Yellow'"}
+    artiest, titel = artiest.strip(" .\""), titel.strip(" .\"")
+    if not artiest or not titel:
+        return {"naam": "liedteksten", "bron": "lyrics.ovh", "tekst": "",
+                "fout": "ik heb zowel een artiest als een titel nodig"}
+    try:
+        gegevens = _haal_json("https://api.lyrics.ovh/v1/"
+                              + urllib.parse.quote(artiest) + "/" + urllib.parse.quote(titel))
+    except Exception as fout:
+        return {"naam": "liedteksten", "bron": "lyrics.ovh", "tekst": "",
+                "fout": f"deze bron kent '{artiest} - {titel}' niet ({type(fout).__name__}); "
+                        "de database is niet compleet, probeer de spelling van artiest en titel"}
+    tekst = str((gegevens or {}).get("lyrics") or "").strip()
+    if not tekst:
+        return {"naam": "liedteksten", "bron": "lyrics.ovh", "tekst": "",
+                "fout": f"geen tekst gevonden voor '{artiest} - {titel}'"}
+    regels = [regel.strip() for regel in tekst.split("\n") if regel.strip()]
+    return {
+        "naam": "liedteksten",
+        "bron": f"lyrics.ovh ({artiest} — {titel})",
+        "tekst": f"Begin van '{titel}' van {artiest}: " + " / ".join(regels[:8])[:420] + " …",
+    }
+
+
+def gereedschap_artiesteninfo(argument: str) -> dict:
+    """Wie een band of zanger is (MusicBrainz)."""
+    naam = (argument or "").strip().strip('"')
+    for voorzetsel in ("artiesteninfo", "informatie over", "wie is", "wie zijn"):
+        if naam.lower().startswith(voorzetsel):
+            naam = naam[len(voorzetsel):].strip()
+    for woord in (" de band", " de zanger", " de zangeres", " band", " muzikant"):
+        if naam.lower().endswith(woord):
+            naam = naam[: -len(woord)].strip()
+    if not naam:
+        return {"naam": "artiesteninfo", "bron": "musicbrainz.org", "tekst": "",
+                "fout": "noem een artiest, bijvoorbeeld 'wie is de band BLØF'"}
+    try:
+        gegevens = _haal_json(
+            "https://musicbrainz.org/ws/2/artist/?query=" + urllib.parse.quote(naam)
+            + "&fmt=json&limit=3", limiet=25,
+        )
+    except Exception as fout:
+        return {"naam": "artiesteninfo", "bron": "musicbrainz.org", "tekst": "",
+                "fout": f"muziekdatabase niet bereikbaar ({type(fout).__name__})"}
+    artiesten = (gegevens or {}).get("artists") or []
+    if not artiesten:
+        return {"naam": "artiesteninfo", "bron": "musicbrainz.org", "tekst": "",
+                "fout": f"geen artiest gevonden die '{naam}' heet"}
+    keuze = next((stuk for stuk in artiesten
+                  if str(stuk.get("name") or "").lower() == naam.lower()), artiesten[0])
+    soort = {"Group": "band of groep", "Person": "persoon", "Orchestra": "orkest",
+             "Choir": "koor"}.get(str(keuze.get("type") or ""), "")
+    leven = keuze.get("life-span") or {}
+    stukken = []
+    if soort:
+        stukken.append(soort)
+    if keuze.get("country"):
+        stukken.append(f"land {keuze['country']}")
+    if leven.get("begin"):
+        stukken.append("sinds " + str(leven["begin"])[:4] +
+                       (" (gestopt in " + str(leven["ended"])[:4] + ")" if leven.get("ended") else ""))
+    if keuze.get("disambiguation"):
+        stukken.append(str(keuze["disambiguation"]))
+    return {
+        "naam": "artiesteninfo",
+        "bron": f"musicbrainz.org/artist/{keuze.get('id')}",
+        "tekst": f"{keuze.get('name')}: " + ", ".join(stukken) + "." if stukken
+                 else f"{keuze.get('name')}: MusicBrainz heeft geen nadere gegevens bij deze artiest.",
+    }
+
+
+def gereedschap_series(argument: str) -> dict:
+    """Waar een tv-serie over gaat (TVmaze)."""
+    zoek = (argument or "").strip().strip('"')
+    for voorzetsel in ("series opzoeken", "waar gaat de serie", "serie", "waar gaat"):
+        if zoek.lower().startswith(voorzetsel):
+            zoek = zoek[len(voorzetsel):].strip()
+    for staart in (" over", " gaat", "?"):
+        if zoek.lower().endswith(staart):
+            zoek = zoek[: -len(staart)].strip()
+    if not zoek:
+        return {"naam": "series", "bron": "tvmaze.com", "tekst": "",
+                "fout": "noem een serie, bijvoorbeeld 'waar gaat de serie Flodder over'"}
+    try:
+        gegevens = _haal_json("https://api.tvmaze.com/search/shows?q=" + urllib.parse.quote(zoek))
+    except Exception as fout:
+        return {"naam": "series", "bron": "tvmaze.com", "tekst": "",
+                "fout": f"seriedatabase niet bereikbaar ({type(fout).__name__})"}
+    treffers = gegevens if isinstance(gegevens, list) else []
+    if not treffers:
+        return {"naam": "series", "bron": "tvmaze.com", "tekst": "",
+                "fout": f"geen serie gevonden die '{zoek}' heet"}
+    stuk = (treffers[0] or {}).get("show") or {}
+    naam = str(stuk.get("name") or zoek)
+    delen = []
+    if stuk.get("premiered"):
+        delen.append("vanaf " + str(stuk["premiered"])[:4])
+    if stuk.get("status"):
+        delen.append(str(stuk["status"]))
+    zenders = ", ".join(str((zender or {}).get("name") or "")
+                        for zender in ([stuk.get("network")] if stuk.get("network") else []) +
+                        (stuk.get("webChannel") and [stuk.get("webChannel")] or []))
+    if zenders:
+        delen.append("op " + zenders)
+    if stuk.get("genres"):
+        delen.append(", ".join(str(g) for g in stuk["genres"][:3]))
+    samenvatting = _schoon(str(stuk.get("summary") or ""))
+    tekst = f"{naam}: " + ", ".join(delen) + ". " if delen else f"{naam}. "
+    tekst += _kort(samenvatting, 320) if samenvatting else "TVmaze heeft geen samenvatting bij deze serie."
+    if len(treffers) > 1:
+        andere = [str((t or {}).get("show", {}).get("name") or "") for t in treffers[1:4]]
+        andere = [stuk for stuk in andere if stuk]
+        if andere:
+            tekst += " Ook gevonden: " + ", ".join(andere) + "."
+    return {"naam": "series", "bron": f"tvmaze.com/shows/{stuk.get('id')}", "tekst": tekst}
+def gereedschap_musea(argument: str) -> dict:
+    """Musea in de buurt van een plaats (OpenStreetMap, met Wikipedia als achtervang)."""
+    plaats = (argument or "").strip().strip('"')
+    for voorzetsel in ("welke musea zijn er in", "welke musea in", "musea in", "museum in", "musea"):
+        if plaats.lower().startswith(voorzetsel):
+            plaats = plaats[len(voorzetsel):].strip()
+    plaats = plaats or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "musea", "bron": "openstreetmap.org", "tekst": "",
+                "fout": "geen plaats opgegeven"}
+    try:
+        plekken, nette = _osm_nabij(plaats, '"tourism"="museum"', 3000, 10)
+    except Exception:
+        plekken, nette = [], plaats
+    regels = []
+    for afstand, naam, kenmerken in plekken:
+        if not naam:
+            continue
+        stuk = f"{naam} ({_getal(afstand, ' km')})"
+        if kenmerken.get("opening_hours"):
+            stuk += f", open {_kort(_schoon(str(kenmerken['opening_hours'])), 40)}"
+        regels.append(stuk)
+    if regels:
+        return {
+            "naam": "musea",
+            "bron": "openstreetmap.org (Overpass)",
+            "tekst": f"Musea binnen drie kilometer van {nette}: " + " | ".join(regels[:8]) + ".",
+        }
+    # OpenStreetMap gaf niets of antwoordde niet: dan zoeken we op Wikipedia
+    try:
+        gegevens = _haal_json(
+            "https://nl.wikipedia.org/w/api.php?action=query&format=json&list=search&srlimit=10"
+            "&srsearch=" + urllib.parse.quote(f"museum {plaats}")
+        )
+        titels = [str(stuk.get("title") or "")
+                  for stuk in ((gegevens or {}).get("query") or {}).get("search") or []]
+        titels = [titel for titel in titels if "museum" in titel.lower()][:6]
+    except Exception as fout:
+        titels = []
+        return {"naam": "musea", "bron": "openstreetmap.org", "tekst": "",
+                "fout": f"geen musea gevonden bij '{plaats}' en de kaartbron antwoordde niet "
+                        f"({type(fout).__name__}; openstreetmap is vaak overbelast)"}
+    if not titels:
+        return {"naam": "musea", "bron": "openstreetmap.org + nl.wikipedia.org", "tekst": "",
+                "fout": f"geen musea gevonden bij '{plaats}' (de kaartbron openstreetmap antwoordde "
+                        "niet, en de Wikipedia-zoeker vond ook niets)"}
+    return {
+        "naam": "musea",
+        "bron": "nl.wikipedia.org (openstreetmap antwoordde niet)",
+        "tekst": f"Musea met een eigen Wikipedia-artikel bij {plaats}: " + ", ".join(titels) + ".",
+    }
+
+
+def _sjabloon_velden(blok: str) -> dict:
+    """De |sleutel=waarde|velden van een wikisjabloon, ook met een [[link|er]] in."""
+    velden: dict = {}
+    for gevonden in re.finditer(
+            r"\|\s*([A-Za-z0-9_]+)\s*=\s*(.*?)(?=\|\s*[A-Za-z0-9_]+\s*=|\Z)", "|" + (blok or ""), re.S):
+        velden[gevonden.group(1).lower()] = _wt_schoon(gevonden.group(2)).strip()
+    return velden
+
+
+def gereedschap_monumenten(argument: str) -> dict:
+    """Rijksmonumenten bij een plaats (Wikipedia-lijst, met OpenStreetMap als achtervang)."""
+    plaats = (argument or "").strip().strip('"')
+    for voorzetsel in ("welke rijksmonumenten staan er in", "rijksmonumenten in de buurt van",
+                       "rijksmonumenten in", "monumenten in de buurt van", "monumenten in"):
+        if plaats.lower().startswith(voorzetsel):
+            plaats = plaats[len(voorzetsel):].strip()
+    plaats = plaats or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": "monumenten", "bron": "nl.wikipedia.org", "tekst": "",
+                "fout": "geen plaats opgegeven"}
+    titel, ruw = "", ""
+    try:
+        for kandidaat in (f"Lijst van rijksmonumenten in {plaats}",
+                          f"Lijst van rijksmonumenten in {plaats} (stad)",
+                          f"Lijst van rijksmonumenten in {plaats} (gemeente)"):
+            gevonden = _wiki_haal(kandidaat)
+            for naam, tekst in gevonden.items():
+                if "{{Tabelrij rijksmonument" in tekst or "telt" in tekst[:2000]:
+                    titel, ruw = naam, tekst
+                    break
+            if ruw:
+                break
+        if not ruw:
+            gegevens = _haal_json(
+                "https://nl.wikipedia.org/w/api.php?action=query&format=json&list=search&srlimit=5"
+                "&srsearch=" + urllib.parse.quote(f"Lijst van rijksmonumenten in {plaats}")
+            )
+            for stuk in ((gegevens or {}).get("query") or {}).get("search") or []:
+                naam = str(stuk.get("title") or "")
+                if naam.lower().startswith("lijst van rijksmonumenten"):
+                    for gevonden_naam, tekst in _wiki_haal(naam).items():
+                        if "{{Tabelrij rijksmonument" in tekst:
+                            titel, ruw = gevonden_naam, tekst
+                            break
+                if ruw:
+                    break
+    except Exception as fout:
+        return {"naam": "monumenten", "bron": "nl.wikipedia.org", "tekst": "",
+                "fout": f"de monumentenlijst is niet op te halen ({type(fout).__name__})"}
+    if not ruw:
+        try:
+            plekken, nette = _osm_nabij(plaats, '"ref:rce"', 2000, 10)
+        except Exception as fout:
+            return {"naam": "monumenten", "bron": "nl.wikipedia.org", "tekst": "",
+                    "fout": f"geen rijksmonumentenlijst voor '{plaats}' en openstreetmap antwoordde "
+                            f"niet ({type(fout).__name__})"}
+        regels = [f"{naam} ({_getal(afstand, ' km')})" for afstand, naam, _ in plekken if naam]
+        if not regels:
+            return {"naam": "monumenten", "bron": "nl.wikipedia.org + openstreetmap.org", "tekst": "",
+                    "fout": f"geen rijksmonumenten gevonden bij '{plaats}'"}
+        return {"naam": "monumenten", "bron": "openstreetmap.org (Overpass, sleutel ref:rce)",
+                "tekst": f"Rijksmonumenten bij {nette}: " + " | ".join(regels[:8]) + "."}
+    try:
+        breedte, lengte, nette = _coordinaten(plaats)
+    except Exception:
+        breedte = lengte = None
+        nette = plaats
+    rijen = []
+    for blok in re.findall(r"\{\{Tabelrij rijksmonument\|(.*?)\}\}", ruw, re.S):
+        velden = _sjabloon_velden(blok)
+        objectnaam = velden.get("objectnaam") or ""
+        adres = velden.get("adres") or ""
+        if not (objectnaam or adres):
+            continue
+        afstand = None
+        try:
+            if breedte is not None and velden.get("lat") and velden.get("lon"):
+                afstand = _afstand_km(breedte, lengte, float(velden["lat"]), float(velden["lon"]))
+        except ValueError:
+            afstand = None
+        rijen.append((afstand, objectnaam, adres, velden.get("bouwjaar") or ""))
+    if rijen:
+        if breedte is not None and any(rij[0] is not None for rij in rijen):
+            rijen.sort(key=lambda rij: rij[0] if rij[0] is not None else 99.0)
+        regels = []
+        for afstand, objectnaam, adres, bouwjaar in rijen[:6]:
+            stuk = _kort(objectnaam, 70) or "monument zonder naam"
+            if adres:
+                stuk += f", {_kort(adres, 40)}"
+            if bouwjaar:
+                stuk += f" ({_kort(bouwjaar, 20)})"
+            if afstand is not None:
+                stuk += f" — {_getal(afstand, ' km')}"
+            regels.append(stuk)
+        telling = re.search(r"telt[^.]{0,90}?([\d.]{2,9})\s*(?:inschrijvingen|rijksmonumenten)", ruw)
+        kop = f"Rijksmonumenten bij {nette}"
+        if telling:
+            kop += f" ({telling.group(1)} in deze gemeente)"
+        return {
+            "naam": "monumenten",
+            "bron": f"nl.wikipedia.org/wiki/{urllib.parse.quote(titel)} (bron: RCE-monumentenregister)",
+            "tekst": kop + ": " + " | ".join(regels) + ".",
+        }
+    return {"naam": "monumenten", "bron": f"nl.wikipedia.org/wiki/{urllib.parse.quote(titel)}",
+            "tekst": "", "fout": f"de lijst '{titel}' heeft geen leesbare monumentenregels"}
+
+
+def _wikidata(vraag: str) -> list:
+    """Een SPARQL-vraag aan Wikidata; geeft de rijen terug."""
+    gegevens = _haal_json(
+        "https://query.wikidata.org/sparql?format=json&query=" + urllib.parse.quote(vraag),
+        koppen={"Accept": "application/sparql-results+json"}, limiet=30,
+    )
+    return ((gegevens or {}).get("results") or {}).get("bindings") or []
+
+
+def _wikidata_tekst(rij: dict, *sleutels: str) -> str:
+    """De leesbare waarde(n) uit een SPARQL-rij."""
+    return str((rij.get(sleutels[0]) or {}).get("value") or "") if sleutels else ""
+
+
+def gereedschap_bergtoppen(argument: str) -> dict:
+    """Hoe hoog een berg is en waar die ligt (Wikidata)."""
+    naam = (argument or "").strip().strip('"')
+    for voorzetsel in ("hoe hoog is de berg", "hoe hoog is de mount", "hoogte van de berg",
+                       "hoe hoog is", "bergtop", "berg"):
+        if naam.lower().startswith(voorzetsel):
+            naam = naam[len(voorzetsel):].strip()
+    naam = re.sub(r"[\"\\{}\[\]]", "", naam).strip()
+    naam = re.sub(r"^(de|het|een)\s+", "", naam, flags=re.I)
+    if not naam:
+        return {"naam": "bergtoppen", "bron": "wikidata.org", "tekst": "",
+                "fout": "noem een berg, bijvoorbeeld 'hoe hoog is de Mont Blanc'"}
+    vraag = (
+        "SELECT ?bergLabel ?hoogte ?landLabel ?gebergteLabel WHERE {"
+        f' ?berg rdfs:label "{naam}"@nl .'
+        " ?berg wdt:P31/wdt:P279* wd:Q8502 ."
+        " OPTIONAL { ?berg wdt:P2044 ?hoogte . }"
+        " OPTIONAL { ?berg wdt:P17 ?land . }"
+        " OPTIONAL { ?berg wdt:P4552 ?gebergte . }"
+        ' SERVICE wikibase:label { bd:serviceParam wikibase:language "nl,en". }'
+        "} LIMIT 12"
+    )
+    rijen: list = []
+    fouttekst = ""
+    try:
+        rijen = _wikidata(vraag)
+    except Exception as fout:
+        fouttekst = type(fout).__name__
+    if not rijen:
+        # achtervang: de gewone Wikipedia-samenvatting, met de eerlijke bron erbij
+        try:
+            gegevens = _haal_json("https://nl.wikipedia.org/api/rest_v1/page/summary/"
+                                  + urllib.parse.quote(naam.replace(" ", "_")))
+            tekst = _schoon(str((gegevens or {}).get("extract") or ""))
+        except Exception:
+            tekst = ""
+        if tekst and gegevens.get("type") != "disambiguation":
+            return {"naam": "bergtoppen", "bron": "nl.wikipedia.org (Wikidata gaf geen bruikbaar antwoord)",
+                    "tekst": f"{gegevens.get('title') or naam}: {_kort(tekst, 400)}"}
+        return {"naam": "bergtoppen", "bron": "wikidata.org", "tekst": "",
+                "fout": f"geen berg gevonden met de naam '{naam}'"
+                        + (f" (wikidata antwoordde met {fouttekst})" if fouttekst else "")}
+    hoogtes: dict = {}
+    for rij in rijen:
+        berg = _wikidata_tekst(rij, "bergLabel") or naam
+        hoogte = _wikidata_tekst(rij, "hoogte")
+        land = _wikidata_tekst(rij, "landLabel")
+        gebergte = _wikidata_tekst(rij, "gebergteLabel")
+        sleutel = (berg, hoogte)
+        stukken = hoogtes.setdefault(sleutel, {"landen": [], "gebergte": gebergte})
+        if land and land not in stukken["landen"]:
+            stukken["landen"].append(land)
+        if gebergte and not stukken["gebergte"]:
+            stukken["gebergte"] = gebergte
+    if any(sleutel[1] for sleutel in hoogtes):
+        # als er een hoogte bekend is, laten we gelijknamige plekken zonder hoogte weg
+        for sleutel in [stuk for stuk in hoogtes if not stuk[1]]:
+            del hoogtes[sleutel]
+    regels = []
+    for (berg, hoogte), stukken in hoogtes.items():
+        deel = berg
+        if hoogte:
+            try:
+                deel += f": {int(float(hoogte)):,} meter".replace(",", ".")
+            except ValueError:
+                deel += f": {hoogte} meter"
+        else:
+            deel += ": hoogte niet bekend in Wikidata"
+        if stukken["landen"]:
+            deel += " in " + ", ".join(stukken["landen"])
+        if stukken["gebergte"]:
+            deel += f" ({stukken['gebergte']})"
+        regels.append(deel)
+    return {"naam": "bergtoppen", "bron": "wikidata.org (CC0)", "tekst": " | ".join(regels[:3]) + "."}
+
+
+def gereedschap_vlaggen(argument: str) -> dict:
+    """Hoe de vlag van een land eruitziet (Wikipedia, met Wikidata als achtervang)."""
+    land = (argument or "").strip().strip('"')
+    for voorzetsel in ("hoe ziet de vlag van", "welke vlag heeft", "de vlag van", "vlag van",
+                       "vlaggen", "vlag"):
+        if land.lower().startswith(voorzetsel):
+            land = land[len(voorzetsel):].strip()
+    land = re.sub(r"[\"\\{}\[\]]", "", land).strip()
+    land = re.sub(r"\s+(eruit|uit|ervan|er van|eigenlijk)\s*\??$", "", land, flags=re.I).strip()
+    land = re.sub(r"^(de|het|een)\s+", "", land, flags=re.I)
+    if not land:
+        return {"naam": "vlaggen", "bron": "nl.wikipedia.org", "tekst": "",
+                "fout": "noem een land, bijvoorbeeld 'hoe ziet de vlag van Japan eruit'"}
+    titel = f"Vlag van {land}"
+    try:
+        gegevens = _haal_json("https://nl.wikipedia.org/api/rest_v1/page/summary/"
+                              + urllib.parse.quote(titel.replace(" ", "_")))
+    except Exception:
+        gegevens = {}
+    tekst = _schoon(str((gegevens or {}).get("extract") or ""))
+    if gegevens.get("type") != "disambiguation" and tekst:
+        stuk = f"{gegevens.get('title') or titel}: {_kort(tekst, 400)}"
+        plaatje = str(((gegevens.get("originalimage") or {}).get("source") or "")).split("?")[0]
+        if plaatje:
+            stuk += f" De vlag staat afgebeeld op {plaatje}."
+        return {"naam": "vlaggen", "bron": f"nl.wikipedia.org/wiki/{urllib.parse.quote(titel.replace(' ', '_'))}",
+                "tekst": stuk}
+    vraag = (
+        "SELECT ?landLabel ?bestand ?media WHERE {"
+        f' ?land rdfs:label "{land}"@nl .'
+        " ?land wdt:P31/wdt:P279* wd:Q6256 ."
+        " OPTIONAL { ?land wdt:P41 ?vlag . OPTIONAL { ?vlag wdt:P94 ?bestand . }"
+        " OPTIONAL { ?vlag wdt:P18 ?media . } }"
+        ' SERVICE wikibase:label { bd:serviceParam wikibase:language "nl,en". }'
+        "} LIMIT 4"
+    )
+    rijen: list = []
+    fouttekst = ""
+    try:
+        rijen = _wikidata(vraag)
+    except Exception as fout:
+        fouttekst = type(fout).__name__
+    if not rijen:
+        return {"naam": "vlaggen", "bron": "nl.wikipedia.org + wikidata.org", "tekst": "",
+                "fout": f"geen vlag gevonden voor '{land}'"
+                        + (f" (wikidata antwoordde met {fouttekst})" if fouttekst else "")}
+    rij = rijen[0]
+    nette = _wikidata_tekst(rij, "landLabel") or land
+    bestand = _wikidata_tekst(rij, "bestand").replace("_", " ")
+    media = _wikidata_tekst(rij, "media")
+    if not bestand and not media:
+        return {"naam": "vlaggen", "bron": "wikidata.org", "tekst": "",
+                "fout": f"wikidata kent geen vlagbestand voor '{nette}'"}
+    stuk = f"De vlag van {nette}"
+    if bestand:
+        stuk += f" is {bestand}"
+    if media:
+        stuk += (" en staat op " if bestand else " staat op ") + media
+    return {"naam": "vlaggen", "bron": "wikidata.org (CC0)", "tekst": stuk + "."}
+
+
+def _lineair(kant: str) -> tuple:
+    """Het aantal keer x en het vaste getal in een uitdrukking als '3x + 5'."""
+    met_x = 0.0
+    vast = 0.0
+    for term in re.findall(r"[+-]?[^+-]+", (kant or "").replace(" ", "")):
+        kaal = term.strip("()")
+        if "x" in kaal:
+            voor = kaal.replace("x", "").replace("*", "")
+            teken = -1.0 if voor.startswith("-") else 1.0
+            voor = voor.lstrip("+-")
+            if voor == "":
+                met_x += teken
+            elif re.fullmatch(r"\d*\.?\d+", voor):
+                met_x += teken * float(voor)
+            else:
+                raise ValueError(f"ik snap het stuk '{term}' niet")
+        elif kaal not in ("", "+", "-"):
+            teken = -1.0 if kaal.startswith("-") else 1.0
+            kaal = kaal.lstrip("+-")
+            if not re.fullmatch(r"\d*\.?\d+", kaal):
+                raise ValueError(f"ik snap het stuk '{term}' niet")
+            vast += teken * float(kaal)
+    return met_x, vast
+
+
+def gereedschap_wiskunde(argument: str) -> dict:
+    """Een vergelijking of een percentage uitrekenen (de engine zelf, zonder internet)."""
+    ruw = (argument or "").strip()
+    for voorzetsel in ("los de vergelijking op", "los op", "vergelijking", "bereken", "reken uit",
+                       "wiskunde"):
+        if ruw.lower().startswith(voorzetsel):
+            ruw = ruw[len(voorzetsel):].strip(" :")
+    if not ruw:
+        return {"naam": "wiskunde", "bron": "de engine zelf", "tekst": "",
+                "fout": "noem een som of vergelijking, bijvoorbeeld 'los op: 3x + 5 = 20'"}
+    laag = ruw.lower().replace(",", ".").replace("keer", "*").replace("gedeeld door", "/")
+    hoe = re.search(r"hoeveel procent is\s*(\d+(?:\.\d+)?)\s*van\s*(\d+(?:\.\d+)?)", laag)
+    if hoe:
+        deel, geheel = float(hoe.group(1)), float(hoe.group(2))
+        if geheel == 0:
+            return {"naam": "wiskunde", "bron": "de engine zelf", "tekst": "",
+                    "fout": "delen door nul kan niet"}
+        return {"naam": "wiskunde", "bron": "de engine zelf",
+                "tekst": (f"{_getal(deel)} is {_getal(deel / geheel * 100, '%')} van {_getal(geheel)}. "
+                          "Regel: deel het kleinste door het grootste en vermenigvuldig met honderd.")}
+    procent = re.search(r"(\d+(?:\.\d+)?)\s*(?:%|procent)\s*(?:van)\s*(\d+(?:\.\d+)?)", laag)
+    if procent:
+        deel, geheel = float(procent.group(1)), float(procent.group(2))
+        return {"naam": "wiskunde", "bron": "de engine zelf",
+                "tekst": (f"{_getal(deel, '%')} van {_getal(geheel)} is {_getal(deel / 100 * geheel)}. "
+                          "Regel: percentage ÷ 100 × het getal.")}
+    vorm = re.sub(r"[^0-9x+\-*/().=^ ]", "", laag).strip()
+    if "=" in vorm and "x" in vorm:
+        links, _, rechts = vorm.partition("=")
+        try:
+            links_x, links_vast = _lineair(links)
+            rechts_x, rechts_vast = _lineair(rechts)
+        except ValueError as fout:
+            return {"naam": "wiskunde", "bron": "de engine zelf", "tekst": "",
+                    "fout": f"{fout} (ik kan alleen vergelijkingen met optellen en aftrekken aan)"}
+        a, b = links_x - rechts_x, links_vast - rechts_vast
+        if a == 0:
+            return {"naam": "wiskunde", "bron": "de engine zelf", "tekst": "",
+                    "fout": "in deze vergelijking valt de x weg, dus er is geen eenduidige oplossing"}
+        x = -b / a
+        stappen = f"{_getal(a)}x = {_getal(-b)}"
+        if links_vast or rechts_vast:
+            stappen = "de losse getallen naar één kant brengen geeft " + stappen + ", en "
+        return {
+            "naam": "wiskunde",
+            "bron": "de engine zelf (lineaire vergelijking)",
+            "tekst": (f"{ruw.strip(' :')} geeft x = {_getal(x)}. Stappen: " + stappen
+                      + f"delen door {_getal(a)}: x = {_getal(-b)} ÷ {_getal(a)} = {_getal(x)}. "
+                      f"Controle: links {_getal(links_x * x + links_vast)} en rechts {_getal(rechts_vast)}.")}
+    if re.fullmatch(r"[\d.+\-*/^()x ]+", laag) and re.search(r"\d", laag):
+        try:
+            uitkomst = _reken(laag)
+        except Exception as fout:
+            return {"naam": "wiskunde", "bron": "de engine zelf", "tekst": "",
+                    "fout": f"deze som snap ik niet ({type(fout).__name__})"}
+        return {"naam": "wiskunde", "bron": "de engine zelf",
+                "tekst": (f"{ruw.strip(' :')} = {_getal(uitkomst)}. "
+                          "Regel: eerst haakjes, dan machtsverheffen, dan keer en delen, "
+                          "en als laatste optellen en aftrekken.")}
+    return {"naam": "wiskunde", "bron": "de engine zelf", "tekst": "",
+            "fout": "ik zie geen som, percentage of vergelijking met x erin; "
+                    "voorbeelden: 'los op: 3x + 5 = 20', '15% van 240', 'hoeveel procent is 12 van 240'"}
+
+
+def gereedschap_statistiek(argument: str) -> dict:
+    """Gemiddelde, mediaan en spreiding van een reeks getallen (de engine zelf)."""
+    getallen = [float(stuk.replace(",", "."))
+                for stuk in re.findall(r"-?\d+(?:[.,]\d+)?", argument or "")]
+    if len(getallen) < 2:
+        return {"naam": "statistiek", "bron": "de engine zelf", "tekst": "",
+                "fout": "noem minstens twee getallen, bijvoorbeeld 'gemiddelde van 4 7 9 12'"}
+    aantal = len(getallen)
+    gesorteerd = sorted(getallen)
+    gemiddelde = sum(getallen) / aantal
+    if aantal % 2:
+        mediaan = gesorteerd[aantal // 2]
+    else:
+        mediaan = (gesorteerd[aantal // 2 - 1] + gesorteerd[aantal // 2]) / 2
+    tellingen: dict = {}
+    for stuk in getallen:
+        tellingen[stuk] = tellingen.get(stuk, 0) + 1
+    modus = max(tellingen.values())
+    modi = sorted(stuk for stuk, keer in tellingen.items() if keer == modus)
+    variantie = sum((stuk - gemiddelde) ** 2 for stuk in getallen) / (aantal - 1)
+    spreiding = variantie ** 0.5
+    modus_stuk = (f"modus {_getal(modi[0])} ({modus} keer)" if modus > 1
+                  else "geen modus (elk getal komt één keer voor)")
+    return {
+        "naam": "statistiek",
+        "bron": f"de engine zelf ({aantal} getallen)",
+        "tekst": (f"Van {aantal} getallen ({', '.join(_getal(stuk) for stuk in getallen[:10])}"
+                  f"{' …' if aantal > 10 else ''}): gemiddelde {_getal(gemiddelde)}, "
+                  f"mediaan {_getal(mediaan)}, {modus_stuk}, kleinste {_getal(gesorteerd[0])}, "
+                  f"grootste {_getal(gesorteerd[-1])}, bereik {_getal(gesorteerd[-1] - gesorteerd[0])}, "
+                  f"standaardafwijking {_getal(spreiding)}. "
+                  "Regels: gemiddelde is de som gedeeld door het aantal; mediaan is het middelste "
+                  "getal als je ze op een rij zet; de standaardafwijking laat zien hoe ver de "
+                  "getallen gemiddeld van het gemiddelde liggen (steekproef, gedeeld door n−1)."),
+    }
+
+
+ROMEINSE_CIJFERS = ((1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
+                    (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"))
+
+
+def _naar_romeins(getal: int) -> str:
+    uit = []
+    for waarde, teken in ROMEINSE_CIJFERS:
+        while getal >= waarde:
+            uit.append(teken)
+            getal -= waarde
+    return "".join(uit)
+
+
+def _van_romeins(tekens: str) -> int:
+    """Romeinse cijfers naar een getal, met de aftrekregel (IV = 4)."""
+    waarden = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+    totaal = 0
+    vorige = 0
+    for teken in reversed(tekens):
+        waarde = waarden[teken]
+        totaal += -waarde if waarde < vorige else waarde
+        vorige = waarde
+    return totaal
+
+
+def gereedschap_romeins(argument: str) -> dict:
+    """Een getal omzetten naar Romeinse cijfers en andersom (de engine zelf)."""
+    ruw = (argument or "").strip()
+    letters = re.search(r"\b([MDCLXVI]{1,15})\b", ruw.upper())
+    getal = re.search(r"\b(\d{1,5})\b", ruw)
+    if letters and not getal:
+        tekens = letters.group(1)
+        waarde = _van_romeins(tekens)
+        if _naar_romeins(waarde) != tekens:
+            return {"naam": "romeinse cijfers", "bron": "de engine zelf", "tekst": "",
+                    "fout": f"'{tekens}' is geen geldig Romeins cijfer"}
+        return {"naam": "romeinse cijfers", "bron": "de engine zelf",
+                "tekst": f"{tekens} is {waarde}. Regel: I=1, V=5, X=10, L=50, C=100, D=500, M=1000; "
+                         "staat een kleiner teken voor een groter, dan trek je het af (IV = 4, IX = 9)."}
+    if getal:
+        waarde = int(getal.group(1))
+        if not 1 <= waarde <= 3999:
+            return {"naam": "romeinse cijfers", "bron": "de engine zelf", "tekst": "",
+                    "fout": f"{waarde} kan niet in Romeinse cijfers (dat gaat van 1 tot 3999)"}
+        return {"naam": "romeinse cijfers", "bron": "de engine zelf",
+                "tekst": (f"{waarde} is in Romeinse cijfers {_naar_romeins(waarde)}. "
+                          "Regel: van groot naar klein, met aftrekreeksen als IV (4), IX (9), "
+                          "XL (40), XC (90), CD (400) en CM (900).")}
+    return {"naam": "romeinse cijfers", "bron": "de engine zelf", "tekst": "",
+            "fout": "noem een getal of Romeinse cijfers, bijvoorbeeld '1969 in Romeinse cijfers' "
+                    "of 'wat is MCMLXIX'"}
+
+
+MAANDNAMEN = ("januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus",
+              "september", "oktober", "november", "december")
+
+
+def gereedschap_weeknummer(argument: str) -> dict:
+    """Welke week, welk kwartaal en welke dag van het jaar het is (de engine zelf)."""
+    tekst = (argument or "").strip().lower()
+    tekst = re.sub(r"\b(welke week is het( nu)?|welke week( is het)?|huidige week|weeknummer)\b", " ", tekst)
+    tekst = tekst.strip(" ?.,!")
+    vandaag = datetime.date.today()
+    if tekst:
+        weekzoek = re.search(r"week\s*(\d{1,2})\s*(?:van\s*)?(\d{4})?", tekst)
+        if weekzoek:
+            week = int(weekzoek.group(1))
+            jaar = int(weekzoek.group(2) or vandaag.isocalendar()[0])
+            if not 1 <= week <= 53:
+                return {"naam": "weeknummers", "bron": "de engine zelf", "tekst": "",
+                        "fout": "een jaar heeft 52 of 53 weken, geen " + str(week)}
+            try:
+                maandag = datetime.date.fromisocalendar(jaar, week, 1)
+            except ValueError:
+                return {"naam": "weeknummers", "bron": "de engine zelf", "tekst": "",
+                        "fout": f"jaar {jaar} heeft geen week {week}"}
+            zondag = maandag + datetime.timedelta(days=6)
+            if maandag.year != zondag.year:
+                jaar = maandag.isocalendar()[0]
+            return {
+                "naam": "weeknummers",
+                "bron": "de engine zelf (ISO 8601)",
+                "tekst": (f"Week {week} van {jaar} loopt van maandag {maandag.day}-{maandag.month:02d}"
+                          f"-{maandag.year} tot zondag {zondag.day}-{zondag.month:02d}-{zondag.year}. "
+                          f"Dat is kwartaal {(maandag.month - 1) // 3 + 1}. "
+                          "Regel: een week begint op maandag en week 1 is de week met de eerste donderdag."),
+            }
+        datum = _datum_uit(tekst)
+        if datum is None:
+            return {"naam": "weeknummers", "bron": "de engine zelf", "tekst": "",
+                    "fout": "noem een week ('week 46 van 2026') of een datum ('12 november 2026')"}
+        jaar, week = datum.isocalendar()[0], datum.isocalendar()[1]
+        dag = datum.timetuple().tm_yday
+        maandag = datum - datetime.timedelta(days=datum.weekday())
+        return {
+            "naam": "weeknummers",
+            "bron": "de engine zelf (ISO 8601)",
+            "tekst": (f"{datum.day}-{datum.month:02d}-{datum.year} valt in week {week} van {jaar}, "
+                      f"kwartaal {(datum.month - 1) // 3 + 1}, dag {dag} van het jaar. "
+                      f"Die week loopt van {maandag.day}-{maandag.month:02d} tot "
+                      f"{(maandag + datetime.timedelta(days=6)).day}-"
+                      f"{(maandag + datetime.timedelta(days=6)).month:02d}. "
+                      "Regel: een week begint op maandag en week 1 is de week met de eerste donderdag."),
+        }
+    week, jaar = vandaag.isocalendar()[1], vandaag.isocalendar()[0]
+    maandag = vandaag - datetime.timedelta(days=vandaag.weekday())
+    vrijdag = maandag + datetime.timedelta(days=4)
+    return {
+        "naam": "weeknummers",
+        "bron": "de engine zelf (ISO 8601)",
+        "tekst": (f"Het is vandaag week {week} van {jaar}, kwartaal {(vandaag.month - 1) // 3 + 1}, "
+                  f"dag {vandaag.timetuple().tm_yday} van het jaar. Deze week loopt van maandag "
+                  f"{maandag.day}-{maandag.month:02d} tot zondag "
+                  f"{(maandag + datetime.timedelta(days=6)).day}-"
+                  f"{(maandag + datetime.timedelta(days=6)).month:02d}; het weekend begint op "
+                  f"zaterdag {(maandag + datetime.timedelta(days=5)).day}-"
+                  f"{(maandag + datetime.timedelta(days=5)).month:02d}. "
+                  f"Regel: een week begint op maandag en week 1 is de week met de eerste donderdag."),
+    }
+
+
+def _sru_veld(blok: str, naam: str) -> str:
+    """Eén veld uit een catalogusrecord (Dublin Core)."""
+    gevonden = re.search(r"<dc:" + naam + r">(.*?)</dc:" + naam + r">", blok or "", re.S)
+    return _schoon(gevonden.group(1)) if gevonden else ""
+
+
+def gereedschap_bieb(argument: str) -> dict:
+    """Of een boek in de catalogus van de openbare bibliotheken staat (KB, GGC)."""
+    zoek = (argument or "").strip().strip('"')
+    zoek = re.sub(r"\s+(in de bieb|in de bibliotheek|te leen|te vinden|uitgeleend|uitgeleend is)\b.*$",
+                  "", zoek, flags=re.I)
+    for voorzetsel in ("is het boek", "ligt het boek", "staat het boek", "zoek in de bibliotheek",
+                       "zoek in de bieb", "heb je het boek", "bieb zoeken"):
+        if zoek.lower().startswith(voorzetsel):
+            zoek = zoek[len(voorzetsel):].strip(" :?,")
+    zoek = re.sub(r"^(is|ligt|staat|zoek|heeft|heb|of|eens)\s+", "", zoek, flags=re.I)
+    zoek = re.sub(r"\s+(te leen|in de bibliotheek|in de bieb|in huis)\s*$", "", zoek, flags=re.I).strip(" ?,")
+    if len(zoek) < 3:
+        return {"naam": "bieb zoeken", "bron": "jsru.kb.nl", "tekst": "",
+                "fout": "noem een titel of schrijver, bijvoorbeeld 'ligt dissociatie in de bieb'"}
+    laatste = ""
+    for vraag in (f'dc.title="{zoek}"', f'dc.creator="{zoek}"', zoek):
+        try:
+            ruw = _haal(
+                "https://jsru.kb.nl/sru/sru?operation=searchRetrieve&x-collection=GGC"
+                "&maximumRecords=5&query=" + urllib.parse.quote(vraag), limiet=25
+            ).decode("utf-8", "replace")
+        except Exception as fout:
+            return {"naam": "bieb zoeken", "bron": "jsru.kb.nl", "tekst": "",
+                    "fout": f"de bibliotheekcatalogus antwoordt niet ({type(fout).__name__})"}
+        laatste = ruw
+        if "<srw:numberOfRecords>0<" not in ruw and "<srw:numberOfRecords>0</" not in ruw:
+            break
+    if "<srw:numberOfRecords>0<" in laatste or "<srw:numberOfRecords>0</" in laatste:
+        return {"naam": "bieb zoeken", "bron": "jsru.kb.nl (catalogus openbare bibliotheken)",
+                "tekst": "", "fout": f"geen boek gevonden dat bij '{zoek}' past"}
+    aantal = re.search(r"<srw:numberOfRecords>(\d+)", laatste)
+    regels = []
+    for record in re.findall(r"<srw:recordData>(.*?)</srw:recordData>", laatste, re.S):
+        titel = _sru_veld(record, "title")
+        if not titel:
+            continue
+        stuk = _kort(titel, 80)
+        maker = _sru_veld(record, "creator")
+        if maker:
+            stuk += f" — {_kort(maker, 40)}"
+        jaar = re.search(r"(1[6-9]\d{2}|20\d{2})", _sru_veld(record, "date"))
+        if jaar:
+            stuk += f" ({jaar.group(1)})"
+        uitgever = _sru_veld(record, "publisher")
+        if uitgever:
+            stuk += f", {_kort(uitgever, 50)}"
+        regels.append(stuk)
+    if not regels:
+        return {"naam": "bieb zoeken", "bron": "jsru.kb.nl", "tekst": "",
+                "fout": f"de catalogus gaf geen leesbare titels bij '{zoek}'"}
+    kop = f"De catalogus van de openbare bibliotheken kent {aantal.group(1) if aantal else '?'} treffers"
+    return {
+        "naam": "bieb zoeken",
+        "bron": "jsru.kb.nl (GGC-catalogus van de openbare bibliotheken)",
+        "tekst": (f"{kop} voor '{zoek}': " + " | ".join(regels[:4]) +
+                  ". Of een exemplaar in jouw vestiging ligt, zie je op de site van jouw bibliotheek."),
+    }
+
+
+def gereedschap_tijdlijn(argument: str) -> dict:
+    """Wat er in een jaar gebeurde (Nederlandse Wikipedia)."""
+    gezocht = re.search(r"\b(1\d{3}|20\d{2}|2100)\b", argument or "")
+    if not gezocht:
+        return {"naam": "tijdlijn", "bron": "nl.wikipedia.org", "tekst": "",
+                "fout": "noem een jaartal, bijvoorbeeld 'wat gebeurde er in 1969'"}
+    jaar = gezocht.group(1)
+    try:
+        gegevens = _haal_json(
+            "https://nl.wikipedia.org/w/api.php?action=query&format=json&prop=extracts"
+            f"&explaintext=1&redirects=1&titles={jaar}"
+        )
+    except Exception as fout:
+        return {"naam": "tijdlijn", "bron": "nl.wikipedia.org", "tekst": "",
+                "fout": f"wikipedia niet bereikbaar ({type(fout).__name__})"}
+    tekst = ""
+    for pagina in (((gegevens or {}).get("query") or {}).get("pages") or {}).values():
+        tekst = str(pagina.get("extract") or "")
+    if not tekst:
+        return {"naam": "tijdlijn", "bron": "nl.wikipedia.org", "tekst": "",
+                "fout": f"geen jaaroverzicht gevonden voor {jaar}"}
+    blok = re.search(r"==\s*Gebeurtenissen\s*==(.*?)(?=\n==[^=]|\Z)", tekst, re.S)
+    if not blok:
+        return {"naam": "tijdlijn", "bron": f"nl.wikipedia.org/wiki/{jaar}", "tekst": "",
+                "fout": f"het jaaroverzicht van {jaar} heeft geen leesbare lijst met gebeurtenissen"}
+    regels = []
+    maand = ""
+    alle = []
+    for regel in blok.group(1).split("\n"):
+        regel = regel.strip()
+        if not regel:
+            continue
+        if regel.lower() in MAANDNAMEN:
+            maand = regel.lower()
+            continue
+        gebeurtenis = re.match(r"^(\d{1,2})\s*-\s*(.{25,})$", regel)
+        if gebeurtenis:
+            alle.append((maand, gebeurtenis.group(1),
+                         _kort(_schoon(gebeurtenis.group(2)), 170).rstrip(" .")))
+    for nummer in range(6):
+        if len(alle) > 6:
+            alle_keuze = alle[min(int(nummer * len(alle) / 6), len(alle) - 1)]
+        elif nummer < len(alle):
+            alle_keuze = alle[nummer]
+        else:
+            break
+        regels.append(f"{alle_keuze[0]} {alle_keuze[1]}: {alle_keuze[2]}")
+    if not regels:
+        return {"naam": "tijdlijn", "bron": f"nl.wikipedia.org/wiki/{jaar}", "tekst": "",
+                "fout": f"in het jaaroverzicht van {jaar} staan geen gebeurtenissen op deze manier beschreven"}
+    return {
+        "naam": "tijdlijn",
+        "bron": f"nl.wikipedia.org/wiki/{jaar}",
+        "tekst": f"Wat er in {jaar} gebeurde: " + " | ".join(regels) + ".",
+    }
+
+# ---- N. nieuws, sport, media en techniek -----------------------------------
+
+
+def _json_stuk(tekst: str) -> str:
+    """Een stukje tekst uit een JSON-blok in een webpagina leesbaar maken."""
+    try:
+        return str(json.loads('"' + tekst + '"'))
+    except Exception:
+        return _schoon(tekst)
+
+
+def _webadres_uit(tekst: str) -> str:
+    """Het eerste webadres uit een vraag, met https:// ervoor als het ontbreekt."""
+    gevonden = _adres_uit(tekst)
+    if gevonden:
+        return gevonden
+    treffer = re.search(
+        r"\b((?:www\.)?[a-z0-9][a-z0-9\-]*(?:\.[a-z0-9][a-z0-9\-]*)+\b(?:/[^\s]*)?)",
+        (tekst or "").lower(),
+    )
+    if not treffer:
+        return ""
+    adres = treffer.group(1).rstrip(".,;:!?")
+    return adres if adres.startswith("http") else "https://" + adres
+
+
+def _domein_uit(tekst: str) -> str:
+    """Een domeinnaam uit een vraag halen ('mx van rijksoverheid.nl')."""
+    kaal = (tekst or "").strip().lower()
+    kaal = re.sub(r"^(?:van|voor|bij|op|het domein|domein|de site|site)\s+", "", kaal)
+    treffer = re.search(r"([a-z0-9][a-z0-9\-]*(?:\.[a-z0-9][a-z0-9\-]*)+)", kaal)
+    return treffer.group(1).rstrip(".") if treffer else ""
+
+
+MAANDEN_NL = ["januari", "februari", "maart", "april", "mei", "juni", "juli",
+              "augustus", "september", "oktober", "november", "december"]
+
+
+def _feed_datum(ruw: str) -> str:
+    """Een datum uit een feed ('Tue, 09 Dec 2025 02:00:00 +0000') naar gewoon Nederlands."""
+    stuk = (ruw or "").strip()
+    if not stuk:
+        return ""
+    for vorm in ("%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S %Z",
+                 "%Y-%m-%dT%H:%M:%S%z", "%d %b %Y %H:%M:%S %z"):
+        try:
+            moment = datetime.datetime.strptime(stuk.rstrip("Z").strip(), vorm)
+            return f"{moment.day} {MAANDEN_NL[moment.month - 1]} {moment.year}"
+        except ValueError:
+            continue
+    treffer = re.search(r"(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s+(\d{4})", stuk)
+    if treffer:
+        kort = treffer.group(2).lower()
+        for naam in MAANDEN_NL:
+            if naam.startswith(kort):
+                return f"{int(treffer.group(1))} {naam} {treffer.group(3)}"
+    treffer = re.search(r"(\d{4})-(\d{2})-(\d{2})", stuk)
+    if treffer:
+        return f"{int(treffer.group(3))} {MAANDEN_NL[int(treffer.group(2)) - 1]} {treffer.group(1)}"
+    return ""
+
+
+def gereedschap_formule1(argument: str) -> dict:
+    """Uitslagen, races en standen van de Formule 1 (Jolpica, de vrije Ergast-spiegel)."""
+    verzoek = (argument or "").strip()
+    laag = verzoek.lower()
+    jaar = datetime.date.today().year
+    jaartal = re.search(r"\b(?:19|20)\d{2}\b", verzoek)
+    if jaartal:
+        jaar = int(jaartal.group(0))
+    bron = "api.jolpi.ca (Jolpica, de open Ergast-spiegel)"
+    try:
+        if "constructeur" in laag or "teamstand" in laag:
+            gegevens = _haal_json(f"https://api.jolpi.ca/ergast/f1/{jaar}/constructorstandings.json", limiet=20)
+            lijsten = ((gegevens.get("MRData") or {}).get("StandingsTable") or {}).get("StandingsLists") or []
+            regels = []
+            for stuk in ((lijsten[0].get("ConstructorStandings") if lijsten else []) or [])[:10]:
+                ploeg = (stuk.get("Constructor") or {}).get("name") or "?"
+                regels.append(f"{stuk.get('position')}. {ploeg} {stuk.get('points')} punten ({stuk.get('wins')} zeges)")
+            if not regels:
+                raise ValueError("geen constructeursstand gevonden")
+            return {"naam": "formule 1", "bron": bron,
+                    "tekst": f"Constructeursstand van de Formule 1 in {jaar}: " + " | ".join(regels)}
+        if re.search(r"\b(stand|klassement|leider|punten|wk)\b", laag):
+            gegevens = _haal_json(f"https://api.jolpi.ca/ergast/f1/{jaar}/driverstandings.json", limiet=20)
+            lijsten = ((gegevens.get("MRData") or {}).get("StandingsTable") or {}).get("StandingsLists") or []
+            regels = []
+            for stuk in ((lijsten[0].get("DriverStandings") if lijsten else []) or [])[:10]:
+                coureur = stuk.get("Driver") or {}
+                naam = f"{coureur.get('givenName', '')} {coureur.get('familyName', '')}".strip() or "?"
+                ploeg = ((stuk.get("Constructors") or [{}])[0] or {}).get("name") or ""
+                regels.append(f"{stuk.get('position')}. {naam}" + (f" ({ploeg})" if ploeg else "")
+                              + f" {stuk.get('points')} punten")
+            if not regels:
+                raise ValueError("geen coureursstand gevonden")
+            return {"naam": "formule 1", "bron": bron,
+                    "tekst": f"Stand van de Formule 1 in {jaar} (WK-stand): " + " | ".join(regels)}
+        if re.search(r"\b(uisl|laatste|vorige|gewonnen|race van|kwalificatie)", laag):
+            gegevens = _haal_json(f"https://api.jolpi.ca/ergast/f1/{jaar}/last/results.json", limiet=20)
+            races = ((gegevens.get("MRData") or {}).get("RaceTable") or {}).get("Races") or []
+            if not races:
+                raise ValueError("geen uitslag gevonden")
+            race = races[0]
+            regels = []
+            for stuk in (race.get("Results") or [])[:10]:
+                coureur = stuk.get("Driver") or {}
+                naam = f"{coureur.get('givenName', '')} {coureur.get('familyName', '')}".strip() or "?"
+                ploeg = (stuk.get("Constructor") or {}).get("name") or ""
+                tijd = (stuk.get("Time") or {}).get("time") or stuk.get("status") or ""
+                regels.append(f"{stuk.get('position')}. {naam} ({ploeg}) {tijd}".strip())
+            baan = race.get("Circuit") or {}
+            waar = ", ".join(stuk for stuk in (baan.get("locality"), baan.get("country")) if stuk)
+            return {"naam": "formule 1", "bron": bron,
+                    "tekst": (f"Uitslag van de laatste race van {jaar}: {race.get('raceName')}"
+                              + (f" in {waar}" if waar else f" op {baan.get('circuitName') or '?'}")
+                              + f" op {race.get('date')}: " + " | ".join(regels))}
+        gegevens = _haal_json(f"https://api.jolpi.ca/ergast/f1/{jaar}/races.json", limiet=20)
+        races = ((gegevens.get("MRData") or {}).get("RaceTable") or {}).get("Races") or []
+        if not races:
+            raise ValueError(f"geen races gevonden voor {jaar}")
+        vandaag = datetime.date.today().isoformat()
+        geweest = [race for race in races if str(race.get("date") or "") < vandaag]
+        komend = [race for race in races if str(race.get("date") or "") >= vandaag]
+        regels = []
+        for race in geweest[-2:]:
+            regels.append(f"geweest: ronde {race.get('round')} {race.get('raceName')} op {race.get('date')}")
+        for race in komend[:4]:
+            baan = race.get("Circuit") or {}
+            waar = ", ".join(stuk for stuk in (baan.get("locality"), baan.get("country")) if stuk)
+            regels.append(f"ronde {race.get('round')} {race.get('raceName')} op {race.get('date')}"
+                          + (f" ({waar})" if waar else ""))
+        return {"naam": "formule 1", "bron": bron,
+                "tekst": f"Formule 1-kalender {jaar} ({len(races)} races): " + " | ".join(regels)}
+    except Exception as fout:
+        return {"naam": "formule 1", "bron": bron, "tekst": "",
+                "fout": (f"de uitslagen konden niet opgehaald worden ({type(fout).__name__}); "
+                         f"probeer het later opnieuw via https://api.jolpi.ca/ergast/f1/{jaar}/races.json")}
+
+
+def gereedschap_voetbalstanden(argument: str) -> dict:
+    """Het laatste nieuws over de stand in de Eredivisie (Google Nieuws)."""
+    verzoek = (argument or "").strip()
+    titels = _nieuwsfeed("eredivisie stand klassement", "voetbal", 6)
+    if not titels:
+        return {"naam": "voetbalstanden", "bron": "Google Nieuws", "tekst": "",
+                "fout": "geen berichten over de stand gevonden; kijk op https://www.eredivisie.nl/"}
+    return {
+        "naam": "voetbalstanden",
+        "bron": "Google Nieuws",
+        "tekst": ("De engine haalt geen standenlijst op, maar wel de laatste berichten over de stand"
+                  + (f" ({_kort(verzoek, 60)})" if verzoek else "") + ": "
+                  + " | ".join(titels)
+                  + ". De officiële stand staat op https://www.eredivisie.nl/."),
+    }
+
+
+def _voetbaluitslag(wedstrijd: dict) -> tuple[str, str] | None:
+    """De eindstand van een wedstrijd; in de open lijst is score soms een blok en soms een lijstje."""
+    score = wedstrijd.get("score")
+    if isinstance(score, dict):
+        score = score.get("ft") or score.get("ht")
+    if isinstance(score, (list, tuple)) and len(score) >= 2:
+        return str(score[0]), str(score[1])
+    return None
+
+
+def gereedschap_eredivisie_programma(argument: str) -> dict:
+    """Het speelschema van de Eredivisie met uitslagen en de eerstvolgende duels (openfootball)."""
+    vandaag = datetime.date.today()
+    seizoenen = ([f"{vandaag.year}-{str(vandaag.year + 1)[2:]}"] if vandaag.month >= 7
+                 else [f"{vandaag.year - 1}-{str(vandaag.year)[2:]}"])
+    seizoenen.append(f"{vandaag.year - 1}-{str(vandaag.year)[2:]}" if vandaag.month >= 7
+                     else f"{vandaag.year - 2}-{str(vandaag.year - 1)[2:]}")
+    bron = "raw.githubusercontent.com/openfootball/football.json"
+    for seizoen in seizoenen:
+        adres = f"https://raw.githubusercontent.com/openfootball/football.json/master/{seizoen}/nl.1.json"
+        try:
+            gegevens = _haal_json(adres, limiet=25)
+        except Exception:
+            continue
+        wedstrijden = (gegevens or {}).get("matches") or []
+        if not wedstrijden:
+            continue
+        dag = vandaag.isoformat()
+        komend = [wedstrijd for wedstrijd in wedstrijden if str(wedstrijd.get("date") or "") >= dag]
+        geweest = [wedstrijd for wedstrijd in wedstrijden
+                   if str(wedstrijd.get("date") or "") < dag and _voetbaluitslag(wedstrijd)]
+        regels = []
+        if geweest:
+            uitslagen = []
+            for wedstrijd in geweest[-4:]:
+                stand = _voetbaluitslag(wedstrijd) or ("?", "?")
+                uitslagen.append(f"{wedstrijd.get('team1')}-{wedstrijd.get('team2')} "
+                                 f"{stand[0]}-{stand[1]}")
+            regels.append("net gespeeld: " + ", ".join(uitslagen))
+        if komend:
+            regels.append("komt eraan: " + ", ".join(
+                f"{wedstrijd.get('date')} {wedstrijd.get('time') or ''} "
+                f"{wedstrijd.get('team1')}-{wedstrijd.get('team2')}".strip()
+                for wedstrijd in komend[:8]))
+        if not regels:
+            return {"naam": "eredivisie programma", "bron": bron, "tekst": "",
+                    "fout": f"geen wedstrijden gevonden in de lijst van {seizoen}"}
+        return {
+            "naam": "eredivisie programma",
+            "bron": bron,
+            "tekst": f"Eredivisie {seizoen} ({len(wedstrijden)} wedstrijden in de lijst): " + " | ".join(regels)
+                     + f". Bron: {adres}",
+        }
+    return {"naam": "eredivisie programma", "bron": bron, "tekst": "",
+            "fout": ("de open wedstrijdlijst van de Eredivisie was niet op te halen; "
+                     "kijk op https://www.eredivisie.nl/ voor het speelschema")}
+
+
+def gereedschap_wielrennen(argument: str) -> dict:
+    """Het laatste nieuws over wielerkoersen en uitslagen (Google Nieuws)."""
+    verzoek = (argument or "").strip()
+    zoek = "wielrennen uitslag koers"
+    if re.search(r"tour|vuelta|giro|klassieker|wereldkampioen", verzoek, re.I):
+        zoek = f"wielrennen uitslag {verzoek}"
+    titels = _nieuwsfeed(zoek, "wielrennen", 6)
+    if not titels:
+        return {"naam": "wielrennen", "bron": "Google Nieuws", "tekst": "",
+                "fout": "geen berichten over wielrennen gevonden; kijk op https://nos.nl/sport/wielrennen"}
+    return {
+        "naam": "wielrennen",
+        "bron": "Google Nieuws",
+        "tekst": ("De engine haalt geen uitslagenlijst op, maar wel het laatste wielernieuws: "
+                  + " | ".join(titels)
+                  + ". Uitslagen per koers staan op https://nos.nl/sport/wielrennen."),
+    }
+
+
+def gereedschap_olympische_medailles(argument: str) -> dict:
+    """De medaillespiegel van de Olympische Spelen (Wikipedia)."""
+    verzoek = (argument or "").strip().lower()
+    jaartal = re.search(r"\b(?:19|20)\d{2}\b", verzoek)
+    soort = "Olympische Winterspelen" if "winter" in verzoek else "Olympische Zomerspelen"
+    titel = f"{soort} {jaartal.group(0)}" if jaartal else soort
+    bron = "nl.wikipedia.org"
+    try:
+        gegevens = _haal_json(
+            "https://nl.wikipedia.org/api/rest_v1/page/summary/" + urllib.parse.quote(titel), limiet=20)
+    except Exception as fout:
+        return {"naam": "olympische medailles", "bron": bron, "tekst": "",
+                "fout": (f"Wikipedia gaf geen antwoord ({type(fout).__name__}); "
+                         f"zoek het zelf op https://nl.wikipedia.org/wiki/{urllib.parse.quote(titel)}")}
+    if not isinstance(gegevens, dict) or not gegevens.get("extract"):
+        return {"naam": "olympische medailles", "bron": bron, "tekst": "",
+                "fout": f"geen pagina gevonden over '{titel}'; probeer een jaartal, bijvoorbeeld 2024"}
+    link = ((gegevens.get("content_urls") or {}).get("desktop") or {}).get("page") or ""
+    return {
+        "naam": "olympische medailles",
+        "bron": bron,
+        "tekst": (f"{gegevens.get('title') or titel}: {_kort(_schoon(gegevens['extract']), 700)}"
+                  + (f" De volledige medaillespiegel staat op {link}." if link else "")),
+    }
+
+
+def gereedschap_podcast_afleveringen(argument: str) -> dict:
+    """De nieuwste afleveringen van een podcast (iTunes en de feed van de maker)."""
+    zoek = (argument or "").strip()
+    zoek = re.sub(r"^(?:wat zijn |wat is |geef |toon |de |het |een )?(?:nieuwste|laatste|recentste)?\s*"
+                  r"afleveringen?\s*(?:van|van de|van het|uit)?\s*", "", zoek, flags=re.I).strip(" ?!:.")
+    if not zoek:
+        return {"naam": "podcast afleveringen", "bron": "itunes.apple.com", "tekst": "",
+                "fout": "noem een podcast, bijvoorbeeld 'de nieuwste afleveringen van Geschiedenis Inside'"}
+    bron = "itunes.apple.com"
+    try:
+        gegevens = _haal_json(
+            "https://itunes.apple.com/search?media=podcast&entity=podcast&limit=3&country=NL&term="
+            + urllib.parse.quote(zoek), limiet=20)
+    except Exception as fout:
+        return {"naam": "podcast afleveringen", "bron": bron, "tekst": "",
+                "fout": f"iTunes antwoordde niet ({type(fout).__name__})"}
+    podcasts = (gegevens or {}).get("results") or []
+    if not podcasts:
+        return {"naam": "podcast afleveringen", "bron": bron, "tekst": "",
+                "fout": f"geen podcast gevonden over '{zoek}'"}
+    gekozen = None
+    for podcast in podcasts:
+        if podcast.get("feedUrl"):
+            gekozen = podcast
+            break
+    if gekozen is None:
+        return {"naam": "podcast afleveringen", "bron": bron, "tekst": "",
+                "fout": f"de podcast '{podcasts[0].get('collectionName')}' geeft geen feed vrij"}
+    try:
+        ruw = _haal(gekozen["feedUrl"], limiet=20).decode("utf-8", "replace")
+    except Exception as fout:
+        return {"naam": "podcast afleveringen", "bron": bron, "tekst": "",
+                "fout": f"de feed van '{gekozen.get('collectionName')}' antwoordde niet ({type(fout).__name__})"}
+    regels = []
+    for blok in re.findall(r"<item[ >](.*?)</item>", ruw, re.S)[:5]:
+        titel = re.search(r"<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", blok, re.S)
+        datum = re.search(r"<pubDate>(.*?)</pubDate>", blok, re.S)
+        if titel:
+            naam = _schoon(titel.group(1))
+            nette_datum = _feed_datum(datum.group(1) if datum else "")
+            regels.append(naam + (f" ({nette_datum})" if nette_datum else ""))
+    if not regels:
+        return {"naam": "podcast afleveringen", "bron": bron, "tekst": "",
+                "fout": f"de feed van '{gekozen.get('collectionName')}' bevatte geen afleveringen"}
+    return {
+        "naam": "podcast afleveringen",
+        "bron": f"iTunes en de feed van {gekozen.get('artistName') or 'de maker'}",
+        "tekst": (f"Nieuwste afleveringen van {gekozen.get('collectionName')} "
+                  f"({gekozen.get('trackCount') or '?'} afleveringen in totaal): " + " | ".join(regels)),
+    }
+
+
+def gereedschap_youtube_zoeken(argument: str) -> dict:
+    """Filmpjes zoeken op YouTube en de titel plus link teruggeven."""
+    zoek = (argument or "").strip()
+    schoon = re.sub(r"^(?:zoek(?:en)?\s+)?(?:eens\s+)?(?:een\s+)?(?:youtube|you\s?tube)?\s*"
+                    r"(?:filmpjes?|videos?|video's|clips?)?\s*(?:over|van|met|naar|voor|op)?\s*",
+                    "", zoek, flags=re.I).strip(" ?!:.")
+    if schoon:
+        zoek = schoon
+    if not zoek:
+        return {"naam": "youtube zoeken", "bron": "youtube.com", "tekst": "",
+                "fout": "noem waar je een filmpje over zoekt"}
+    bron = "youtube.com"
+    try:
+        ruw = _haal("https://www.youtube.com/results?search_query=" + urllib.parse.quote(zoek),
+                    limiet=25).decode("utf-8", "replace")
+    except Exception as fout:
+        return {"naam": "youtube zoeken", "bron": bron, "tekst": "",
+                "fout": (f"YouTube gaf geen antwoord ({type(fout).__name__}); "
+                         f"zoek zelf op https://www.youtube.com/results?search_query={urllib.parse.quote(zoek)}")}
+    regels = []
+    for blok in re.split(r'"videoRenderer":', ruw)[1:9]:
+        sleutel = re.search(r'\{"videoId":"([\w\-]{11})"', blok)
+        titel = re.search(r'"title":\{"runs":\[\{"text":"(.*?)"\}\]', blok, re.S)
+        kanaal = re.search(r'"ownerText":\{"runs":\[\{"text":"(.*?)"', blok, re.S)
+        if not sleutel or not titel:
+            continue
+        regel = _kort(_json_stuk(titel.group(1)), 90)
+        if kanaal:
+            regel += f" ({_kort(_json_stuk(kanaal.group(1)), 30)})"
+        regels.append(regel + f" — https://www.youtube.com/watch?v={sleutel.group(1)}")
+        if len(regels) >= 6:
+            break
+    if not regels:
+        return {"naam": "youtube zoeken", "bron": bron, "tekst": "",
+                "fout": f"geen filmpjes gevonden over '{zoek}'"}
+    return {"naam": "youtube zoeken", "bron": bron,
+            "tekst": f"YouTube-filmpjes over '{zoek}': " + " | ".join(regels)}
+
+
+KRANTENLANDEN = {
+    "nederland": "netherlands-newspapers",
+    "duitsland": "germany-newspapers",
+    "belgie": "belgium-newspapers", "belgië": "belgium-newspapers",
+    "frankrijk": "france-newspapers", "spanje": "spain-newspapers",
+    "engeland": "uk-newspapers", "verenigd koninkrijk": "uk-newspapers",
+    "amerika": "us-newspapers", "verenigde staten": "us-newspapers",
+}
+
+
+def gereedschap_kranten_voorpagina(argument: str) -> dict:
+    """De voorpagina's van de kranten van vandaag (frontpages.com)."""
+    verzoek = (argument or "").strip().lower()
+    land = "nederland"
+    for naam in KRANTENLANDEN:
+        if naam in verzoek:
+            land = naam
+            break
+    adres = f"https://www.frontpages.com/{KRANTENLANDEN[land]}/"
+    bron = "frontpages.com"
+    try:
+        ruw = _haal(adres, limiet=25).decode("utf-8", "replace")
+    except Exception as fout:
+        return {"naam": "kranten voorpagina", "bron": bron, "tekst": "",
+                "fout": f"frontpages.com antwoordde niet ({type(fout).__name__}); kijk zelf op {adres}"}
+    per_datum: dict[str, list[str]] = {}
+    for jaar, maand, dag, naam in re.findall(
+            r"/t/(\d{4})/(\d{2})/(\d{2})/([a-z0-9\-]+)\.(?:webp|jpe?g|png)", ruw):
+        per_datum.setdefault(f"{jaar}-{maand}-{dag}", []).append(naam)
+    if not per_datum:
+        return {"naam": "kranten voorpagina", "bron": bron, "tekst": "",
+                "fout": f"geen voorpagina's gevonden op {adres}"}
+    nieuwste = max(per_datum)
+    titels = []
+    for stuk in per_datum[nieuwste]:
+        schoon = re.sub(r"-[0-9][0-9a-z]{4,}$", "", stuk)
+        nette = " ".join(woord if woord in ("de", "het", "van", "en") else woord.capitalize()
+                         for woord in schoon.split("-"))
+        if nette and nette not in titels:
+            titels.append(nette)
+    return {
+        "naam": "kranten voorpagina",
+        "bron": bron,
+        "tekst": (f"Voorpagina's van {nieuwste} in {land} ({len(titels)} kranten): "
+                  + ", ".join(titels[:14]) + f". De plaatjes staan op {adres} ."),
+    }
+
+
+def gereedschap_mediawijsheid(argument: str) -> dict:
+    """Een checklist om een bericht te wegen, plus recente factchecks (eigen naslag)."""
+    verzoek = (argument or "").strip()
+    titels = _nieuwsfeed(f"factcheck {verzoek}" if verzoek else "factcheck", "factcheck", 4)
+    tekst = ("Checklist om een bericht te wegen (eigen naslag, geen oordeel over dit bericht): "
+             "1) wie is de afzender en wat heeft die te winnen; "
+             "2) staat er een datum en een plaats bij; "
+             "3) verwijst het naar een origineel document, onderzoek of ooggetuige; "
+             "4) melden meerdere onafhankelijke media hetzelfde; "
+             "5) is de kop erger dan het verhaal zelf; "
+             "6) staan er foto's bij die ook ergens anders al opdoken.")
+    if titels:
+        tekst += (f" Recente factcheck-berichten{' over ' + verzoek if verzoek else ''}: "
+                  + " | ".join(titels) + ".")
+    else:
+        tekst += (" Factchecks vind je bij https://nieuwscheckers.nl/ en https://www.nu.nl/factcheck .")
+    return {"naam": "mediawijsheid", "bron": "eigen naslag en Google Nieuws", "tekst": tekst}
+
+
+def gereedschap_streaming(argument: str) -> dict:
+    """Bij welke streamingdienst iets te zien is: de zoeklink van JustWatch."""
+    titel = re.sub(r"^(?:op welke dienst|waar kan ik|is)\s+", "", (argument or "").strip(), flags=re.I)
+    titel = re.sub(r"\s+(?:te zien|te streamen|streamen)\s*$", "", titel, flags=re.I).strip(" ?!.")
+    if not titel:
+        return {"naam": "streaming", "bron": "justwatch.com", "tekst": "",
+                "fout": "noem een film of serie, bijvoorbeeld 'waar kan ik Flodder streamen'"}
+    adres = "https://www.justwatch.com/nl/zoeken?q=" + urllib.parse.quote(titel)
+    return {
+        "naam": "streaming",
+        "bron": "justwatch.com",
+        "tekst": (f"JustWatch bouwt zijn aanbod in de browser op met JavaScript en heeft geen open API "
+                  f"die deze engine mag gebruiken. Zoek '{titel}' zelf op: {adres} . "
+                  f"Daar zie je per dienst (Netflix, Disney+, Prime Video, HBO Max en verhuur) of het "
+                  f"te streamen is, en of het alleen te koop of te huur is."),
+    }
+
+
+def gereedschap_concerten(argument: str) -> dict:
+    """Zalen en podia voor concerten in de buurt (OpenStreetMap)."""
+
+    plaats = (argument or "").strip() or GEREEDSCHAP_PLAATS
+    if len(plaats.split()) > 2:
+        plaats = _plaats_uit(plaats) or plaats
+    if not plaats:
+        return {"naam": "concerten", "bron": "openstreetmap.org", "tekst": "",
+                "fout": "geen plaats opgegeven"}
+    kaart = ("https://www.openstreetmap.org/search?query="
+             + urllib.parse.quote(f"music venue {plaats}"))
+    try:
+        plekken, nette = _osm_nabij(plaats, '"amenity"="music_venue"', 5000, 12)
+    except Exception as fout:
+        titels = _nieuwsfeed(f"concert {plaats}", "concerten", 4)
+        tekst = f"OpenStreetMap kon de podia niet leveren ({fout}). Zoek ze zelf op de kaart: {kaart} ."
+        if titels:
+            tekst += " In het nieuws: " + " | ".join(titels) + "."
+        return {"naam": "concerten", "bron": "openstreetmap.org (Overpass) en Google Nieuws",
+                "tekst": tekst}
+    if not plekken:
+        return {"naam": "concerten", "bron": "openstreetmap.org (Overpass)",
+                "tekst": f"Geen muziekpodia gevonden binnen 5 km van {nette}."}
+    regels = []
+    for afstand, naam, kenmerken in plekken[:8]:
+        stuk = f"{naam or 'podium'} ({_getal(afstand, ' km')})"
+        if kenmerken.get("website"):
+            stuk += f" {_kort(str(kenmerken['website']), 60)}"
+        regels.append(stuk)
+    return {
+        "naam": "concerten",
+        "bron": "openstreetmap.org (Overpass)",
+        "tekst": (f"Muziekpodia bij {nette}: " + ", ".join(regels)
+                  + ". Wat er speelt staat op de sites van de zalen en in de uitagenda van de gemeente."),
+    }
+
+
+def gereedschap_evenementenkalender(argument: str) -> dict:
+    """Wat er te doen is in een gemeente (Google Nieuws)."""
+
+    plaats = (argument or "").strip() or GEREEDSCHAP_PLAATS
+    if len(plaats.split()) > 2:
+        plaats = _plaats_uit(plaats) or plaats
+    if not plaats:
+        return {"naam": "evenementenkalender", "bron": "Google Nieuws", "tekst": "",
+                "fout": "geen plaats opgegeven"}
+    titels = _nieuwsfeed(f"evenementen {plaats}", "evenementen", 6)
+    if not titels:
+        return {"naam": "evenementenkalender", "bron": "Google Nieuws", "tekst": "",
+                "fout": f"geen berichten over evenementen in {plaats} gevonden"}
+    return {
+        "naam": "evenementenkalender",
+        "bron": "Google Nieuws",
+        "tekst": (f"Wat er in {plaats} te doen is, uit het nieuws: " + " | ".join(titels)
+                  + ". De volledige agenda staat op de site van de gemeente en bij de lokale omroep."),
+    }
+def _is_ip(tekst: str) -> bool:
+    """Lijkt dit op een IPv4- of IPv6-adres?"""
+    kaal = (tekst or "").strip()
+    if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", kaal):
+        return all(0 <= int(deel) <= 255 for deel in kaal.split("."))
+    return bool(re.fullmatch(r"[0-9a-fA-F]{0,4}(?::[0-9a-fA-F]{0,4}){2,7}", kaal) and ":" in kaal)
+
+
+def _pakketnaam_uit(tekst: str, stopwoorden: set) -> str:
+    """De eerste bruikbare naam (pakket, image) uit een vraag halen."""
+    kaal_tekst = re.sub(
+        r"\b(npm|node|nodejs|python|py|pip|docker|dockerhub)[\s\-_]+"
+        r"(pakket|pakketten|package|packages|module|image|images)\b", " ", (tekst or "").lower())
+    for stuk in re.split(r"[\s,]+", kaal_tekst):
+        kaal = stuk.strip("?.!:;\"'()[]")
+        if not kaal:
+            continue
+        if kaal in stopwoorden and not re.search(r"[-.@/=]", kaal):
+            continue
+        if re.fullmatch(r"@?[a-z0-9][a-z0-9\-_.+!]*(?:/[a-z0-9][a-z0-9\-_.+!]*)?", kaal):
+            return kaal
+    return ""
+
+
+def gereedschap_ip(argument: str) -> dict:
+    """Van welk land, welke provider en welke regio een IP-adres is (ipapi.co)."""
+    verzoek = (argument or "").strip()
+    treffer = re.search(r"(\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F]{0,4}(?::[0-9a-fA-F]{0,4}){2,7})", verzoek)
+    adres = treffer.group(1) if treffer else ""
+    if adres and not _is_ip(adres):
+        adres = ""
+    bron = "ipapi.co"
+    adres_van_de_vraag = f"https://ipapi.co/{urllib.parse.quote(adres)}/json/" if adres else "https://ipapi.co/json/"
+    try:
+        gegevens = _haal_json(adres_van_de_vraag, limiet=15)
+    except Exception as fout:
+        return {"naam": "ip", "bron": bron, "tekst": "",
+                "fout": (f"ipapi.co antwoordde niet ({type(fout).__name__}); "
+                         f"kijk zelf op {adres_van_de_vraag}")}
+    if not isinstance(gegevens, dict) or gegevens.get("error"):
+        melding = (gegevens or {}).get("reason") if isinstance(gegevens, dict) else ""
+        return {"naam": "ip", "bron": bron, "tekst": "",
+                "fout": (f"geen gegevens over {adres or 'dit adres'}" + (f" ({melding})" if melding else ""))}
+    LANDEN_NL = {"Netherlands": "Nederland", "The Netherlands": "Nederland",
+                 "Belgium": "België", "Germany": "Duitsland",
+                 "United States": "Verenigde Staten", "United States of America": "Verenigde Staten",
+                 "United Kingdom": "Verenigd Koninkrijk", "Great Britain": "Verenigd Koninkrijk",
+                 "Czech Republic": "Tsjechië", "Czechia": "Tsjechië", "Greece": "Griekenland",
+                 "Portugal": "Portugal", "Finland": "Finland", "Hungary": "Hongarije",
+                 "Romania": "Roemenië", "Ukraine": "Oekraïne",
+                 "France": "Frankrijk", "Spain": "Spanje", "Italy": "Italië", "Poland": "Polen",
+                 "Sweden": "Zweden", "Norway": "Noorwegen", "Denmark": "Denemarken",
+                 "Canada": "Canada", "Australia": "Australië", "Japan": "Japan", "China": "China",
+                 "India": "India", "Brazil": "Brazilië", "Ireland": "Ierland", "Austria": "Oostenrijk",
+                 "Switzerland": "Zwitserland", "Turkey": "Turkije", "Morocco": "Marokko",
+                 "South Africa": "Zuid-Afrika", "Russian Federation": "Rusland", "Russia": "Rusland"}
+    land = LANDEN_NL.get(str(gegevens.get("country_name") or ""), gegevens.get("country_name"))
+    waar = ", ".join(stuk for stuk in (gegevens.get("city"), gegevens.get("region"), land) if stuk)
+    delen = [f"IP {gegevens.get('ip') or adres or 'van deze machine'}"
+             + (f" ligt in {waar}" if waar else "")
+             + (f" (postcode {gegevens.get('postcode')})" if gegevens.get("postcode") else "")]
+    if gegevens.get("org") or gegevens.get("asn"):
+        delen.append(f"provider {gegevens.get('org') or '?'} ({gegevens.get('asn') or '?'})")
+    if gegevens.get("timezone"):
+        delen.append(f"tijdzone {gegevens['timezone']}")
+    if gegevens.get("network"):
+        delen.append(f"netwerk {gegevens['network']}")
+    return {"naam": "ip", "bron": bron, "tekst": "; ".join(delen) + "."}
+
+
+def gereedschap_dns(argument: str) -> dict:
+    """De DNS-records van een domein opvragen via Google DNS (dns.google)."""
+    verzoek = (argument or "").strip()
+    domein = _domein_uit(verzoek)
+    if not domein:
+        return {"naam": "dns", "bron": "dns.google", "tekst": "",
+                "fout": "noem een domeinnaam, bijvoorbeeld 'de mx-records van rijksoverheid.nl'"}
+    laag = verzoek.lower()
+    soorten = []
+    for woord, soort in (("aaaa", 28), ("mx", 15), ("mail", 15), ("txt", 16), ("spf", 16),
+                         ("dkim", 16), ("ns", 2), ("name", 2), ("cname", 5), ("alias", 5),
+                         ("soa", 6), ("a-records", 1), ("a-record", 1)):
+        if re.search(rf"\b{woord}\b", laag) and soort not in soorten:
+            soorten.append(soort)
+    if not soorten:
+        soorten = [1, 28, 15, 16, 2]
+    regels = []
+    for nummer, soort in enumerate(soorten[:5]):
+        try:
+            gegevens = _haal_json(
+                f"https://dns.google/resolve?name={urllib.parse.quote(domein)}&type={soort}", limiet=15)
+        except Exception as fout:
+            if nummer == 0:
+                return {"naam": "dns", "bron": "dns.google", "tekst": "",
+                        "fout": (f"dns.google antwoordde niet ({type(fout).__name__}); kijk zelf op "
+                                 f"https://dns.google/query?name={urllib.parse.quote(domein)} "
+                                 f"(of probeer het over een minuut opnieuw)")}
+            regels.append(f"type {soort}: niet op te halen")
+            continue
+        antwoorden = (gegevens or {}).get("Answer") or []
+        if not antwoorden:
+            regels.append(f"type {soort}: geen records")
+            continue
+        stukken = []
+        for antwoord in antwoorden[:6]:
+            waarde = _schoon(str(antwoord.get("data") or ""))
+            if soort == 16:
+                waarde = waarde.strip('"')
+            stukken.append(f"{_kort(waarde, 90)} (ttl {antwoord.get('TTL')})")
+        regels.append(f"type {soort}: " + "; ".join(stukken))
+    return {"naam": "dns", "bron": "dns.google (1 = A, 15 = MX, 16 = TXT, 2 = NS)",
+            "tekst": f"DNS voor {domein}: " + " | ".join(regels)}
+
+
+def gereedschap_ssl(argument: str) -> dict:
+    """Wanneer certificaten van een site verlopen, uit het transparantielogboek (crt.sh)."""
+    domein = _domein_uit(argument)
+    if not domein:
+        return {"naam": "ssl", "bron": "crt.sh", "tekst": "",
+                "fout": "noem een domein, bijvoorbeeld 'wanneer verloopt het certificaat van rijksoverheid.nl'"}
+    rijen, bron = [], ""
+    for adres, naam, wachttijd in (
+        (f"https://crt.sh/?q={urllib.parse.quote(domein)}&output=json", "crt.sh", 22),
+        ("https://api.certspotter.com/v1/issuances?include_subdomains=false&expand=dns_names&domain="
+         + urllib.parse.quote(domein), "api.certspotter.com", 15),
+    ):
+        try:
+            proef = json.loads(_haal(adres, limiet=wachttijd).decode("utf-8", "replace"))
+        except Exception:
+            continue
+        if isinstance(proef, list) and proef:
+            rijen, bron = proef, naam
+            break
+    if not rijen:
+        return {"naam": "ssl", "bron": "crt.sh", "tekst": "",
+                "fout": (f"de certificaatlogboeken gaven geen antwoord voor {domein}; kijk zelf op "
+                         f"https://crt.sh/?q={urllib.parse.quote(domein)} of op "
+                         f"https://www.ssllabs.com/ssltest/analyze.html?d={urllib.parse.quote(domein)}")}
+    vandaag = datetime.date.today().isoformat()
+    actief = []
+    laatste = ""
+    for rij in rijen:
+        if not isinstance(rij, dict):
+            continue
+        einde = str(rij.get("not_after") or "")[:10]
+        if einde >= vandaag:
+            actief.append(time.mktime(time.strptime(einde, "%Y-%m-%d")))
+        if einde > laatste:
+            laatste = einde
+    uitgever = ""
+    naam_telling: dict[str, int] = {}
+    for rij in rijen:
+        if not isinstance(rij, dict):
+            continue
+        herkomst = rij.get("issuer_name")
+        if not herkomst and isinstance(rij.get("issuer"), dict):
+            herkomst = rij["issuer"].get("name")
+        if not uitgever and herkomst:
+            uitgever = str(herkomst)
+        namen = rij.get("dns_names")
+        if not isinstance(namen, list):
+            namen = str(rij.get("name_value") or "").splitlines()
+        for naam in namen:
+            if str(naam).strip():
+                naam_telling[str(naam).strip()] = naam_telling.get(str(naam).strip(), 0) + 1
+    bekendste = sorted(naam_telling, key=lambda naam: -naam_telling[naam])[:4]
+    return {
+        "naam": "ssl",
+        "bron": bron,
+        "tekst": (f"Certificaten voor {domein} in het logboek van {bron}: {len(rijen)} vermeldingen, "
+                  f"waarvan {len(actief)} nog geldig. Het verst vooruit geldige certificaat loopt tot "
+                  f"{laatste or 'onbekend'}."
+                  + (f" Uitgever van de eerste vermelding: {_kort(uitgever, 80)}." if uitgever else "")
+                  + (f" Namen op de certificaten: " + ", ".join(bekendste) + "." if bekendste else "")
+                  + " Let op: dit zijn de inschrijvingen in het transparantielogboek, niet het "
+                    "certificaat dat jouw browser nu te zien krijgt."),
+    }
+
+
+def gereedschap_github(argument: str) -> dict:
+    """Sterren, taal en laatste update van een GitHub-project (let op: 60 verzoeken per uur)."""
+    verzoek = (argument or "").strip()
+    treffer = re.search(r"(?:github\.com/)?\b([A-Za-z0-9][A-Za-z0-9\-_.]{0,38})/([A-Za-z0-9][A-Za-z0-9\-_.]{0,60})",
+                        verzoek)
+    koppen = {"Accept": "application/vnd.github+json"}
+    bron = "api.github.com"
+    try:
+        if treffer:
+            gegevens = _haal_json(f"https://api.github.com/repos/{treffer.group(1)}/{treffer.group(2)}",
+                                  koppen=koppen, limiet=20)
+        else:
+            zoek = re.sub(r"\b(github|repo|repositories|repository|project|van|op|zoek|eens)\b", " ",
+                          verzoek, flags=re.I).strip(" ?!.,:")
+            if not zoek:
+                return {"naam": "github", "bron": bron, "tekst": "",
+                        "fout": "noem een project, bijvoorbeeld 'github torvalds/linux'"}
+            keur = f"{zoek} in:name" if " " not in zoek else zoek
+            gevonden = _haal_json("https://api.github.com/search/repositories"
+                                  "?sort=stars&order=desc&per_page=3&q="
+                                  + urllib.parse.quote(keur), koppen=koppen, limiet=20)
+            treffers = (gevonden or {}).get("items") or []
+            if not treffers:
+                return {"naam": "github", "bron": bron, "tekst": "",
+                        "fout": f"geen projecten gevonden bij '{zoek}'"}
+            gegevens = treffers[0]
+    except urllib.error.HTTPError as fout:
+        if fout.code == 403:
+            return {"naam": "github", "bron": bron, "tekst": "",
+                    "fout": ("GitHub weigert dit verzoek: het tegoed van 60 verzoeken per uur zonder "
+                             "sleutel is op. Probeer het over een uur opnieuw of kijk zelf op "
+                             f"https://github.com/{(treffer.group(1) + '/' + treffer.group(2)) if treffer else ''}")}
+        if fout.code == 404:
+            return {"naam": "github", "bron": bron, "tekst": "",
+                    "fout": f"dit project bestaat niet op GitHub ({verzoek})"}
+        return {"naam": "github", "bron": bron, "tekst": "",
+                "fout": f"GitHub gaf foutcode {fout.code}; probeer het later opnieuw"}
+    except Exception as fout:
+        return {"naam": "github", "bron": bron, "tekst": "",
+                "fout": f"GitHub antwoordde niet ({type(fout).__name__})"}
+    if not isinstance(gegevens, dict) or not gegevens.get("full_name"):
+        return {"naam": "github", "bron": bron, "tekst": "", "fout": f"geen gegevens over '{verzoek}'"}
+    licentie = (gegevens.get("license") or {}).get("spdx_id") or "geen licentie opgegeven"
+    return {
+        "naam": "github",
+        "bron": bron,
+        "tekst": (f"{gegevens['full_name']}: {_kort(str(gegevens.get('description') or 'geen omschrijving'), 180)}"
+                  f" — {gegevens.get('stargazers_count', 0)} sterren, {gegevens.get('forks_count', 0)} forks"
+                  f", taal {gegevens.get('language') or 'onbekend'}"
+                  f", laatste push {str(gegevens.get('pushed_at') or '')[:10]}"
+                  f", {gegevens.get('open_issues_count', 0)} open meldingen, licentie {licentie}. "
+                  f"Zonder sleutel mag de engine 60 verzoeken per uur bij GitHub doen."),
+    }
+
+
+def gereedschap_npm(argument: str) -> dict:
+    """De laatste versie en omschrijving van een npm-pakket (registry.npmjs.org)."""
+    verzoek = (argument or "").strip()
+    naam = _pakketnaam_uit(verzoek, {
+        "npm", "node", "nodejs", "pakket", "pakketten", "package", "module", "laatste", "nieuwste",
+        "versie", "van", "het", "de", "een", "welke", "wat", "is", "zijn", "er", "op", "bij", "voor",
+        "geeft", "staat", "hoeveel", "downloads", "en", "in", "die", "dat", "toon", "zoek"})
+    if not naam:
+        return {"naam": "npm", "bron": "registry.npmjs.org", "tekst": "",
+                "fout": "noem een pakket, bijvoorbeeld 'de laatste versie van npm-pakket express'"}
+    bron = "registry.npmjs.org"
+    try:
+        gegevens = _haal_json(f"https://registry.npmjs.org/{urllib.parse.quote(naam, safe='@/')}", limiet=25)
+    except urllib.error.HTTPError as fout:
+        if fout.code == 404:
+            return {"naam": "npm", "bron": bron, "tekst": "", "fout": f"het pakket '{naam}' bestaat niet op npm"}
+        return {"naam": "npm", "bron": bron, "tekst": "", "fout": f"npm gaf foutcode {fout.code}"}
+    except Exception as fout:
+        return {"naam": "npm", "bron": bron, "tekst": "",
+                "fout": f"npm antwoordde niet ({type(fout).__name__})"}
+    versie = ((gegevens or {}).get("dist-tags") or {}).get("latest") or ""
+    if not versie:
+        return {"naam": "npm", "bron": bron, "tekst": "", "fout": f"geen versies gevonden voor '{naam}'"}
+    laatste_versie = ((gegevens.get("versions") or {}).get(versie) or {})
+    wanneer = ((gegevens.get("time") or {}).get(versie) or "")[:10]
+    return {
+        "naam": "npm",
+        "bron": bron,
+        "tekst": (f"npm-pakket {naam}: laatste versie {versie}"
+                  + (f" van {wanneer}" if wanneer else "")
+                  + f" — {_kort(str(laatste_versie.get('description') or gegevens.get('description') or 'geen omschrijving'), 160)}"
+                  f" Licentie {laatste_versie.get('license') or 'onbekend'}"
+                  f", {len(gegevens.get('versions') or {})} versies in totaal"
+                  + (f", {len(laatste_versie.get('dependencies') or {})} afhankelijkheden"
+                     if laatste_versie.get("dependencies") is not None else "")
+                  + f". Kijk op https://www.npmjs.com/package/{naam}"),
+    }
+
+
+def gereedschap_pypi(argument: str) -> dict:
+    """De laatste versie en omschrijving van een Python-pakket (PyPI)."""
+    verzoek = (argument or "").strip()
+    naam = _pakketnaam_uit(verzoek, {
+        "pypi", "pip", "install", "installeren", "python", "pakket", "pakketten", "package", "module",
+        "laatste", "nieuwste", "versie", "van", "het", "de", "een", "welke", "wat", "is", "zijn",
+        "er", "op", "bij", "voor", "geeft", "staat", "hoeveel", "en", "in", "die", "dat", "toon", "zoek"})
+    if not naam:
+        return {"naam": "pypi", "bron": "pypi.org", "tekst": "",
+                "fout": "noem een pakket, bijvoorbeeld 'de laatste versie van python-pakket requests'"}
+    bron = "pypi.org"
+    try:
+        gegevens = _haal_json(f"https://pypi.org/pypi/{urllib.parse.quote(naam)}/json", limiet=25)
+    except urllib.error.HTTPError as fout:
+        if fout.code == 404:
+            return {"naam": "pypi", "bron": bron, "tekst": "", "fout": f"het pakket '{naam}' bestaat niet op PyPI"}
+        return {"naam": "pypi", "bron": bron, "tekst": "", "fout": f"PyPI gaf foutcode {fout.code}"}
+    except Exception as fout:
+        return {"naam": "pypi", "bron": bron, "tekst": "",
+                "fout": f"PyPI antwoordde niet ({type(fout).__name__})"}
+    info = (gegevens or {}).get("info") or {}
+    if not info.get("version"):
+        return {"naam": "pypi", "bron": bron, "tekst": "", "fout": f"geen versie gevonden voor '{naam}'"}
+    versie = str(info["version"])
+    uitgaven = ((gegevens.get("releases") or {}).get(versie) or [])
+    wanneer = ""
+    if uitgaven and isinstance(uitgaven[0], dict):
+        wanneer = str(uitgaven[0].get("upload_time_iso_8601") or uitgaven[0].get("upload_time") or "")[:10]
+    return {
+        "naam": "pypi",
+        "bron": bron,
+        "tekst": (f"Python-pakket {info.get('name') or naam}: laatste versie {versie}"
+                  + (f" van {wanneer}" if wanneer else "")
+                  + f" — {_kort(str(info.get('summary') or 'geen omschrijving'), 160)}"
+                  f" Licentie {info.get('license') or 'onbekend'}"
+                  f", gemaakt door {info.get('author') or info.get('author_email') or 'onbekend'}"
+                  + (f", vraagt Python {info['requires_python']}" if info.get("requires_python") else "")
+                  + f". Kijk op https://pypi.org/project/{info.get('name') or naam}/"),
+    }
+
+
+def gereedschap_docker(argument: str) -> dict:
+    """Welke versies (tags) een Docker-image heeft (Docker Hub)."""
+    verzoek = (argument or "").strip()
+    naam = _pakketnaam_uit(verzoek, {
+        "docker", "dockerhub", "hub", "image", "images", "tag", "tags", "versie", "versies",
+        "laatste", "nieuwste", "van", "het", "de", "een", "welke", "wat", "heeft", "hebben", "is",
+        "zijn", "er", "op", "bij", "voor", "staan", "staat", "beschikbaar", "hoeveel", "en", "in",
+        "die", "dat", "toon", "zoek"})
+    if not naam:
+        return {"naam": "docker", "bron": "hub.docker.com", "tekst": "",
+                "fout": "noem een image, bijvoorbeeld 'welke tags heeft docker nginx'"}
+    pad = naam if "/" in naam else f"library/{naam}"
+    bron = f"https://hub.docker.com/r/{pad}"
+    try:
+        gegevens = _haal_json(
+            f"https://hub.docker.com/v2/repositories/{pad}/tags?page_size=12&ordering=last_updated",
+            limiet=20)
+    except urllib.error.HTTPError as fout:
+        if fout.code == 404:
+            return {"naam": "docker", "bron": bron, "tekst": "", "fout": f"de image '{pad}' bestaat niet op Docker Hub"}
+        return {"naam": "docker", "bron": bron, "tekst": "", "fout": f"Docker Hub gaf foutcode {fout.code}"}
+    except Exception as fout:
+        return {"naam": "docker", "bron": bron, "tekst": "",
+                "fout": f"Docker Hub antwoordde niet ({type(fout).__name__})"}
+    resultaten = (gegevens or {}).get("results") or []
+    if not resultaten:
+        return {"naam": "docker", "bron": bron, "tekst": "",
+                "fout": f"geen tags gevonden voor {pad}; kijk op {bron}"}
+    regels = []
+    for tag in resultaten[:8]:
+        grootte = tag.get("full_size")
+        regels.append(f"{tag.get('name')} ({str(tag.get('last_updated') or '')[:10]}"
+                      + (f", {_getal(grootte / 1048576, ' MB')}" if isinstance(grootte, (int, float)) else "")
+                      + ")")
+    return {"naam": "docker", "bron": bron,
+            "tekst": (f"Docker-image {pad} heeft {gegevens.get('count') or len(resultaten)} tags; "
+                      f"de nieuwste: " + ", ".join(regels) + ".")}
+
+
+def gereedschap_cve(argument: str) -> dict:
+    """Bekende beveiligingslekken (CVE's) bij een programma of versie (NVD)."""
+    verzoek = (argument or "").strip()
+    if not verzoek:
+        return {"naam": "cve", "bron": "services.nvd.nist.gov", "tekst": "",
+                "fout": "noem software of een CVE-nummer, bijvoorbeeld 'cve in nginx'"}
+    bron = "services.nvd.nist.gov (NVD)"
+    nummer = re.search(r"CVE-\d{4}-\d{4,7}", verzoek, re.I)
+    try:
+        if nummer:
+            adres = ("https://services.nvd.nist.gov/rest/json/cves/2.0?cveId="
+                     + urllib.parse.quote(nummer.group(0).upper()))
+        else:
+            schoon = re.sub(r"\b(cve|cve's|lek|lekken|kwetsbaarheid|beveiligingslek|in|van|bij|het|de|zoek)\b",
+                            " ", verzoek, flags=re.I).strip() or verzoek
+            adres = ("https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=5&keywordSearch="
+                     + urllib.parse.quote(schoon[:60]))
+        gegevens = _haal_json(adres, limiet=25)
+    except Exception as fout:
+        return {"naam": "cve", "bron": bron, "tekst": "",
+                "fout": (f"de NVD antwoordde niet ({type(fout).__name__}); kijk zelf op "
+                         f"https://nvd.nist.gov/vuln/search?query={urllib.parse.quote(verzoek[:40])}")}
+    lekken = (gegevens or {}).get("vulnerabilities") or []
+    if not lekken:
+        return {"naam": "cve", "bron": bron, "tekst": "",
+                "fout": f"geen lekken gevonden voor '{verzoek}' in de NVD"}
+    regels = []
+    for stuk in lekken[:5]:
+        cve = stuk.get("cve") or {}
+        omschrijving = ""
+        for taal in cve.get("descriptions") or []:
+            if taal.get("lang") == "en":
+                omschrijving = _schoon(str(taal.get("value") or ""))
+                break
+        score = ""
+        maten = cve.get("metrics") or {}
+        for sleutel in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+            if maten.get(sleutel):
+                waarde = (maten[sleutel][0] or {}).get("cvssData") or {}
+                cijfer = waarde.get("baseScore")
+                ernst = waarde.get("baseSeverity") or (maten[sleutel][0] or {}).get("baseSeverity") or ""
+                if cijfer is not None:
+                    score = f", score {_getal(cijfer)}{' ' + str(ernst).lower() if ernst else ''}"
+                break
+        regels.append(f"{cve.get('id')} ({str(cve.get('published') or '')[:10]}{score}): "
+                      f"{_kort(omschrijving, 150)}")
+    return {
+        "naam": "cve",
+        "bron": bron,
+        "tekst": (f"Lekken in de NVD bij '{verzoek}' ({gegevens.get('totalResults')} treffers, "
+                  f"hier de eerste): " + " | ".join(regels)),
+    }
+
+
+def gereedschap_wachtwoordlek(argument: str) -> dict:
+    """Of een wachtwoord in een datalek voorkomt, met k-anonimiteit (Pwned Passwords)."""
+    wachtwoord = (argument or "").strip()
+    wachtwoord = re.sub(r"^(?:is|komt|staat)?\s*(?:mijn\s+)?wachtwoord\s*(?:al\s*)?"
+                        r"(?:in\s*een\s*datalek|voor|in\s*datalekken)\s*[?:]*\s*", "",
+                        wachtwoord, flags=re.I).strip()
+    if not wachtwoord:
+        return {"naam": "wachtwoordlek", "bron": "api.pwnedpasswords.com", "tekst": "",
+                "fout": "noem het wachtwoord waarvan je wilt weten of het in een datalek voorkomt"}
+    bron = "api.pwnedpasswords.com (Have I Been Pwned)"
+    # Alleen de eerste vijf tekens van de sha1 gaan naar buiten (k-anonimiteit).
+    volledig = hashlib.sha1(wachtwoord.encode("utf-8")).hexdigest().upper()
+    eerste, rest = volledig[:5], volledig[5:]
+    try:
+        ruw = _haal(f"https://api.pwnedpasswords.com/range/{eerste}",
+                    koppen={"Add-Padding": "true"}, limiet=15).decode("utf-8", "replace")
+    except Exception as fout:
+        return {"naam": "wachtwoordlek", "bron": bron, "tekst": "",
+                "fout": (f"de dienst antwoordde niet ({type(fout).__name__}); "
+                         f"kijk zelf op https://haveibeenpwned.com/Passwords")}
+    aantal = 0
+    for regel in ruw.splitlines():
+        stukken = regel.strip().split(":")
+        if len(stukken) >= 2 and stukken[0].strip().upper() == rest:
+            try:
+                aantal = int(stukken[1])
+            except ValueError:
+                aantal = 0
+            break
+    if aantal:
+        tekst = (f"Dit wachtwoord komt {aantal} keer voor in de databanken van Have I Been Pwned. "
+                 f"Het is dus bekend en moet weg: kies een nieuw wachtwoord van minstens 16 tekens, "
+                 f"en gebruik het nergens anders. Gebruik eventueel het gereedschap 'uuid en wachtwoord' "
+                 f"om er een te laten maken.")
+    else:
+        tekst = ("Dit wachtwoord komt niet voor in de databanken van Have I Been Pwned. "
+                 "Dat betekent niet dat het sterk is: kort en voorspelbaar blijft riskant. "
+                 "Gebruik per dienst een ander wachtwoord en een wachtwoordmanager.")
+    return {
+        "naam": "wachtwoordlek",
+        "bron": bron,
+        "tekst": tekst + " De engine stuurde alleen de eerste vijf tekens van de sha1 op, nooit het "
+                         "wachtwoord of de hele hash.",
+    }
+
+
+def gereedschap_wayback(argument: str) -> dict:
+    """Hoe een site er vroeger uitzag (Internet Archive, Wayback Machine)."""
+    adres = _webadres_uit(argument)
+    if not adres:
+        return {"naam": "wayback", "bron": "archive.org", "tekst": "",
+                "fout": "noem een webadres, bijvoorbeeld 'hoe zag nu.nl er in 2015 uit'"}
+    jaar = re.search(r"\b(19|20)\d{2}\b", argument or "")
+    bron = "archive.org/wayback"
+    vraag = ("http://archive.org/wayback/available?url=" + urllib.parse.quote(adres)
+             + (f"&timestamp={jaar.group(0)}" if jaar else ""))
+    try:
+        gegevens = _haal_json(vraag, limiet=20)
+    except Exception as fout:
+        return {"naam": "wayback", "bron": bron, "tekst": "",
+                "fout": (f"het internetarchief antwoordde niet ({type(fout).__name__}); "
+                         f"kijk zelf op https://web.archive.org/web/*/{adres}")}
+    dichtst = ((gegevens or {}).get("archived_snapshots") or {}).get("closest") or {}
+    if dichtst.get("available") and dichtst.get("url"):
+        moment = str(dichtst.get("timestamp") or "")
+        nette = (f"{moment[:4]}-{moment[4:6]}-{moment[6:8]}"
+                 + (f" om {moment[8:10]}:{moment[10:12]}" if len(moment) >= 12 else ""))
+        return {
+            "naam": "wayback",
+            "bron": bron,
+            "tekst": (f"De dichtstbijzijnde bewaarde versie van {adres} is van {nette}: {dichtst['url']} "
+                      f"({dichtst.get('status') or '?'})"),
+        }
+    return {
+        "naam": "wayback",
+        "bron": bron,
+        "tekst": (f"Het internetarchief heeft geen bewaarde versie van {adres}"
+                  + (f" in de buurt van {jaar.group(0)}" if jaar else "") + ". Je kunt hem zelf laten "
+                  f"opslaan: https://web.archive.org/save/{adres} ."),
+    }
+
+
+def gereedschap_qr(argument: str) -> dict:
+    """Een QR-code maken bij een link of tekst (api.qrserver.com)."""
+    doel = (argument or "").strip().strip('"')
+    doel = re.sub(r"^(?:maak|genereer|geef)?\s*(?:een\s*)?qr-?code\s*(?:voor|van|met)?\s*[:\s]*",
+                  "", doel, flags=re.I).strip()
+    if not doel:
+        return {"naam": "qr", "bron": "api.qrserver.com", "tekst": "",
+                "fout": "noem de tekst of link voor de QR-code"}
+    adres = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=" + urllib.parse.quote(doel)
+    bron = "api.qrserver.com"
+    try:
+        proef = _haal("https://api.qrserver.com/v1/create-qr-code/?size=200x200&data="
+                      + urllib.parse.quote(doel), limiet=20)
+    except Exception as fout:
+        return {"naam": "qr", "bron": bron,
+                "tekst": (f"QR-code voor '{_kort(doel, 60)}': {adres} "
+                          f"(niet gecontroleerd: de dienst antwoordde niet, {type(fout).__name__})")}
+    if proef[:4] != b"\x89PNG":
+        return {"naam": "qr", "bron": bron, "tekst": "",
+                "fout": f"de dienst gaf geen plaatje terug; probeer {adres} zelf"}
+    return {"naam": "qr", "bron": bron,
+            "tekst": (f"QR-code voor '{_kort(doel, 60)}': {adres} "
+                      f"(net gemaakt als proef: {len(proef)} bytes PNG).")}
+
+
+def gereedschap_kortelink(argument: str) -> dict:
+    """Een lange link kort maken (TinyURL)."""
+    adres = _webadres_uit(argument)
+    if not adres or "." not in adres:
+        return {"naam": "kortelink", "bron": "tinyurl.com", "tekst": "",
+                "fout": "noem een webadres om in te korten, bijvoorbeeld 'kort https://... in'"}
+    bron = "tinyurl.com"
+    try:
+        ruw = _haal("https://tinyurl.com/api-create.php?url=" + urllib.parse.quote(adres, safe=""),
+                    limiet=20).decode("utf-8", "replace").strip()
+    except Exception as fout:
+        return {"naam": "kortelink", "bron": bron, "tekst": "",
+                "fout": f"TinyURL antwoordde niet ({type(fout).__name__})"}
+    if not ruw.startswith("http"):
+        return {"naam": "kortelink", "bron": bron, "tekst": "",
+                "fout": f"TinyURL gaf geen korte link terug ('{_kort(ruw, 60)}')"}
+    return {"naam": "kortelink", "bron": bron,
+            "tekst": (f"Korte link: {ruw} (van {_kort(adres, 120)}). Let op: een korte link verbergt "
+                      f"waar hij heen wijst, dus deel hem alleen als je de bestemming vertrouwt.")}
+
+
+def gereedschap_linuxcommando(argument: str) -> dict:
+    """Wat een Linux-commando doet, met voorbeelden (cheat.sh)."""
+    verzoek = (argument or "").strip()
+    treffer = re.search(r"[a-z0-9][a-z0-9\-_.]{1,30}", re.sub(
+        r"\b(wat|doet|dit|deze|dat|die|het|commando|linux|uitleg|over|van|de|een|man|page|"
+        r"voorbeeld|voorbeelden|hoe|werkt|is|er|eens|even|zoek|geef|toon|betekent)\b",
+        " ", verzoek.lower()))
+    if not treffer:
+        return {"naam": "linuxcommando", "bron": "cheat.sh", "tekst": "",
+                "fout": "noem een commando, bijvoorbeeld 'wat doet het commando tar'"}
+    naam = treffer.group(0)
+    bron = f"https://cheat.sh/{naam}"
+    try:
+        ruw = _haal(bron, koppen={"User-Agent": "curl/8.5.0", "Accept": "text/plain"},
+                    limiet=20).decode("utf-8", "replace")
+    except Exception as fout:
+        return {"naam": "linuxcommando", "bron": bron, "tekst": "",
+                "fout": (f"cheat.sh antwoordde niet ({type(fout).__name__}); "
+                         f"probeer 'man {naam}' in een terminal")}
+    ruw = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", ruw)
+    if "Unknown topic" in ruw or "unknown topic" in ruw.lower():
+        return {"naam": "linuxcommando", "bron": bron, "tekst": "",
+                "fout": (f"cheat.sh kent het commando '{naam}' niet; probeer 'man {naam}' in een "
+                         f"terminal of kijk op {bron}")}
+    regels = []
+    for regel in ruw.splitlines():
+        schoon = re.sub(r"\s+", " ", regel).strip()
+        if not schoon or schoon.startswith("cheat.sheets"):
+            continue
+        schoon = re.sub(r"^#+\s*", "", schoon)
+        if schoon.lower() == naam or schoon in regels:
+            continue
+        regels.append(schoon)
+        if len(regels) >= 12:
+            break
+    if not regels:
+        return {"naam": "linuxcommando", "bron": bron, "tekst": "",
+                "fout": f"geen uitleg gevonden voor '{naam}'"}
+    return {"naam": "linuxcommando", "bron": bron,
+            "tekst": f"Over het commando {naam}: " + " | ".join(regels)}
+
+
+CRON_DAGEN = ["zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"]
+
+
+def _cron_getallen(veld: str, hoog: int, namen: dict | None = None) -> list[int] | None:
+    """De losse getallen uit een cronveld; None bij '*', een stap of een leeg veld."""
+    veld = (veld or "").strip().lower()
+    if namen:
+        for naam, nummer in namen.items():
+            veld = re.sub(rf"\b{naam}\b", str(nummer), veld)
+    if not veld or veld in ("*", "?") or veld.startswith("*/"):
+        return None
+    getallen = []
+    for stuk in veld.split(","):
+        stuk = stuk.strip()
+        if not stuk:
+            continue
+        if "-" in stuk:
+            begin, _, eind = stuk.partition("-")
+            if "/" in eind:
+                eind = eind.split("/")[0]
+            try:
+                getallen.extend(range(int(begin), int(eind) + 1))
+            except ValueError:
+                return None
+        elif "/" in stuk:
+            return None
+        else:
+            try:
+                getallen.append(int(stuk))
+            except ValueError:
+                return None
+    return getallen or None
+
+
+def gereedschap_cron(argument: str) -> dict:
+    """Wat een cron-expressie betekent (eigen ontleder, plus de link naar crontab.guru)."""
+    verzoek = (argument or "").strip().strip("'\"")
+    verzoek = re.sub(r"^(?:wat betekent|uitleg van|leg uit|cron\s*expressie)\s*[:\s]*", "",
+                     verzoek, flags=re.I).strip()
+    kort = {"@yearly": "0 0 1 1 *", "@annually": "0 0 1 1 *", "@monthly": "0 0 1 * *",
+            "@weekly": "0 0 * * 0", "@daily": "0 0 * * *", "@midnight": "0 0 * * *",
+            "@hourly": "0 * * * *"}
+    laag = verzoek.lower()
+    if laag == "@reboot":
+        return {"naam": "cron", "bron": "de engine zelf en crontab.guru", "tekst":
+                "@reboot betekent: één keer draaien zodra de machine opstart (niet op een tijdstip)."}
+    if laag in kort:
+        verzoek = kort[laag] + f"  (de afkorting {laag})"
+    velden = verzoek.split()
+    if verzoek.count("("):
+        velden = verzoek.split("(")[0].split()
+    if len(velden) == 6:
+        return {"naam": "cron", "bron": "de engine zelf en crontab.guru", "tekst":
+                "Dit lijkt een expressie met zes velden (met seconden vooraan). Deze engine kent de "
+                "gewone vijf velden: minuut, uur, dag van de maand, maand en dag van de week. "
+                "Kijk voor de zesde vorm op https://crontab.guru/ ."}
+    if len(velden) != 5:
+        return {"naam": "cron", "bron": "de engine zelf en crontab.guru", "tekst": "",
+                "fout": ("een cron-expressie heeft vijf velden: minuut, uur, dag van de maand, maand en "
+                         "dag van de week — bijvoorbeeld '0 3 * * 1'")}
+    minuut, uur, dag, maand, weekdag = velden
+    maand_namen = {naam[:3]: nummer for nummer, naam in enumerate(MAANDEN_NL, start=1)}
+    dag_namen = {naam[:3]: nummer for nummer, naam in enumerate(CRON_DAGEN)}
+    for engels, nummer in (("sun", 0), ("mon", 1), ("tue", 2), ("wed", 3), ("thu", 4),
+                           ("fri", 5), ("sat", 6), ("jan", 1), ("feb", 2), ("mar", 3),
+                           ("apr", 4), ("may", 5), ("jun", 6), ("jul", 7), ("aug", 8),
+                           ("sep", 9), ("oct", 10), ("nov", 11), ("dec", 12)):
+        maand_namen.setdefault(engels, nummer)
+        if nummer <= 6:
+            dag_namen.setdefault(engels, nummer)
+    minuten = _cron_getallen(minuut, 59)
+    uren = _cron_getallen(uur, 23)
+    dagen = _cron_getallen(dag, 31)
+    maanden = _cron_getallen(maand, 12, maand_namen)
+    weekdagen = _cron_getallen(weekdag, 7, dag_namen)
+    if weekdagen:
+        weekdagen = sorted({0 if nummer == 7 else nummer for nummer in weekdagen if 0 <= nummer <= 7})
+    if minuten and uren and minuten[0] == minuten[-1] and uren[0] == uren[-1]:
+        klok = f"om {uren[0]:02d}:{minuten[0]:02d}"
+    elif minuten and uren and minuten[0] == minuten[-1]:
+        klok = f"op minuut {minuten[0]} van uur " + ", ".join(str(nummer) for nummer in uren[:6])
+    elif minuten and minuten[0] == minuten[-1]:
+        klok = f"elk uur op minuut {minuten[0]}"
+    elif uur and uur[0] == uur[-1]:
+        klok = f"elk uur tussen {uur[0]:02d}:00 en {uur[-1]:02d}:59"
+    elif minuut.startswith("*/") and minuut[2:].isdigit():
+        klok = f"elke {int(minuut[2:])} minuten"
+    elif minuten:
+        klok = "op minuut " + ", ".join(str(nummer) for nummer in minuten[:8])
+    else:
+        klok = "elk uur, elke minuut"
+    if weekdagen:
+        wanneer = "elke " + ", ".join(CRON_DAGEN[nummer] for nummer in weekdagen)
+    elif dagen:
+        wanneer = "op " + ", ".join(f"de {nummer}e" for nummer in dagen[:6]) + " van de maand"
+    else:
+        wanneer = "elke dag"
+    if maanden:
+        wanneer += " in " + ", ".join(MAANDEN_NL[nummer - 1] for nummer in maanden[:6])
+    schoon = re.sub(r"\s*\(.*$", "", verzoek).strip()
+    return {
+        "naam": "cron",
+        "bron": "de engine zelf en crontab.guru",
+        "tekst": (f"Cron '{schoon}' betekent: {wanneer} {klok}. "
+                  f"De vijf velden zijn minuut, uur, dag van de maand, maand en dag van de week; "
+                  f"'*/n' betekent elke n, en lijstjes met komma's mogen. "
+                  f"Zie ook https://crontab.guru/#{schoon.replace(' ', '_')}"),
+    }
+
+
+def gereedschap_schermafdruk(argument: str) -> dict:
+    """Een plaatje van een webpagina laten maken (image.thum.io)."""
+    adres = _webadres_uit(argument)
+    if not adres:
+        return {"naam": "schermafdruk", "bron": "image.thum.io", "tekst": "",
+                "fout": "noem een webadres, bijvoorbeeld 'maak een schermafdruk van https://nu.nl'"}
+    groot = "https://image.thum.io/get/width/800/" + adres
+    bron = "image.thum.io"
+    try:
+        proef = _haal("https://image.thum.io/get/width/300/" + adres, limiet=40)
+    except Exception as fout:
+        return {"naam": "schermafdruk", "bron": bron,
+                "tekst": (f"Schermafdruk van {adres}: {groot} "
+                          f"(niet gecontroleerd: de dienst antwoordde niet binnen de tijd, {type(fout).__name__})")}
+    is_plaatje = proef[:4] == b"\x89PNG" or proef[:3] == b"\xff\xd8\xff"
+    if not is_plaatje:
+        return {"naam": "schermafdruk", "bron": bron, "tekst": "",
+                "fout": f"de dienst gaf geen plaatje terug voor {adres}; kijk zelf op {groot}"}
+    soort = "PNG" if proef[:4] == b"\x89PNG" else "JPEG"
+    return {"naam": "schermafdruk", "bron": bron,
+            "tekst": (f"Schermafdruk van {adres}: {groot} "
+                      f"(net gemaakt en gecontroleerd: {len(proef)} bytes {soort}).")}
+
+
+def _uuid4() -> str:
+    """Een willekeurig UUID volgens versie 4, uit 16 bytes van deze machine."""
+    ruw = bytearray(os.urandom(16))
+    ruw[6] = (ruw[6] & 0x0F) | 0x40
+    ruw[8] = (ruw[8] & 0x3F) | 0x80
+    hexen = ruw.hex()
+    return f"{hexen[:8]}-{hexen[8:12]}-{hexen[12:16]}-{hexen[16:20]}-{hexen[20:]}"
+
+
+def _uuid5(naam: str) -> str:
+    """Een UUID versie 5 (sha1, DNS-namespace) zodat dezelfde naam hetzelfde nummer geeft."""
+    namespace = bytes.fromhex("6ba7b8109dad11d180b400c04fd430c8")
+    ruw = bytearray(hashlib.sha1(namespace + naam.encode("utf-8")).digest()[:16])
+    ruw[6] = (ruw[6] & 0x0F) | 0x50
+    ruw[8] = (ruw[8] & 0x3F) | 0x80
+    hexen = ruw.hex()
+    return f"{hexen[:8]}-{hexen[8:12]}-{hexen[12:16]}-{hexen[16:20]}-{hexen[20:]}"
+
+
+def gereedschap_uuid(argument: str) -> dict:
+    """Een unieke code of een sterk wachtwoord maken (eigen code, zonder internet)."""
+    verzoek = (argument or "").strip()
+    laag = verzoek.lower()
+    bron = "de engine zelf (os.urandom)"
+    if re.search(r"\b(uuid|guid|unieke code|identifier|id)\b", laag) and not re.search(
+            r"\b(wachtwoord|paswoord|password)\b", laag):
+        naam = ""
+        sporen = re.search(r"\b(?:van|voor|met de naam)\s+(.+)$", verzoek, re.I)
+        if sporen:
+            naam = sporen.group(1).strip(' :?"')
+        if naam:
+            return {"naam": "uuid", "bron": bron,
+                    "tekst": (f"Vaste code voor '{_kort(naam, 60)}' (UUID versie 5, sha1 met de "
+                              f"DNS-namespace): {_uuid5(naam)}. Dezelfde naam geeft altijd dezelfde code, "
+                              f"op elke machine.")}
+        codes = [_uuid4() for _ in range(3)]
+        return {"naam": "uuid", "bron": bron,
+                "tekst": (f"Drie willekeurige UUID's (versie 4, 16 random bytes per stuk): "
+                          + " | ".join(codes) + ". Ze zijn niet te voorspellen en botsen in de praktijk niet.")}
+    tekens = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*()-_=+"
+    lengte = 20
+    getal = re.search(r"\b(\d{2})\b", verzoek)
+    if getal:
+        lengte = max(8, min(64, int(getal.group(1))))
+    wachtwoorden = []
+    for _ in range(3):
+        ruw = os.urandom(lengte)
+        wachtwoorden.append("".join(tekens[byte % len(tekens)] for byte in ruw))
+    return {
+        "naam": "uuid",
+        "bron": bron,
+        "tekst": (f"Drie wachtwoorden van {lengte} tekens (letters, cijfers en leestekens, gemaakt met "
+                  f"os.urandom van deze machine): " + " | ".join(wachtwoorden)
+                  + ". Zet elk wachtwoord in een wachtwoordmanager en gebruik het maar op één plek; "
+                    "deze engine bewaart ze niet."),
+    }
+
+
+def gereedschap_json(argument: str) -> dict:
+    """Rommelige JSON netjes leesbaar of juist compact maken (eigen code)."""
+    tekst = (argument or "").strip()
+    kaal = re.sub(r"^\s*json\b[\s:]*", "", tekst, flags=re.I)
+    compact = bool(re.match(r"^(?:minif\w*|compact|plat|één regel|een regel)\b", kaal, re.I))
+    kaal = re.sub(r"^(?:formatteren|formatteer|format|netjes|mooi|mooi maken|minif\w*|compact|plat)\b[\s:]*",
+                  "", kaal, flags=re.I).strip(" :")
+    if not kaal:
+        return {"naam": "json", "bron": "de engine zelf", "tekst": "",
+                "fout": "plak de json erbij, bijvoorbeeld 'json formatteren {\"a\":1}'"}
+    try:
+        gegevens = json.loads(kaal)
+    except json.JSONDecodeError as fout:
+        return {"naam": "json", "bron": "de engine zelf", "tekst": "",
+                "fout": (f"dit is geen geldige json ({fout.msg} op regel {fout.lineno}, kolom {fout.colno})")}
+    except Exception as fout:
+        return {"naam": "json", "bron": "de engine zelf", "tekst": "",
+                "fout": f"dit is geen geldige json ({type(fout).__name__})"}
+    if compact:
+        uit = json.dumps(gegevens, ensure_ascii=False, separators=(",", ":"))
+        soort = "compact"
+    else:
+        uit = json.dumps(gegevens, ensure_ascii=False, indent=2)
+        soort = "netjes"
+    if isinstance(gegevens, dict):
+        samenvatting = f"een object met {len(gegevens)} sleutels"
+    elif isinstance(gegevens, list):
+        samenvatting = f"een lijst met {len(gegevens)} stukken"
+    else:
+        samenvatting = f"één waarde ({type(gegevens).__name__})"
+    return {
+        "naam": "json",
+        "bron": "de engine zelf",
+        "tekst": (f"Geldige json: {samenvatting}. {soort.capitalize()} gemaakt ({len(uit)} tekens):\n"
+                  + _kort(uit, 900)),
+    }
+
+
+def gereedschap_unixtijd(argument: str) -> dict:
+    """Een tijdstempel omrekenen naar een datum, of andersom (eigen code)."""
+    verzoek = (argument or "").strip()
+    bron = "de engine zelf"
+    try:
+        zone = zoneinfo.ZoneInfo("Europe/Amsterdam")
+    except Exception:
+        zone = datetime.timezone.utc
+    if not verzoek or verzoek.lower() in ("nu", "nu?"):
+        nu = datetime.datetime.now(zone)
+        return {"naam": "unixtijd", "bron": bron,
+                "tekst": (f"Nu is het {int(nu.timestamp())} (seconden sinds 1 januari 1970, UTC), "
+                          f"dat is {nu.strftime('%d-%m-%Y %H:%M')} in Nederland.")}
+    getal = re.search(r"\b(\d{9,13})\b", verzoek)
+    if getal:
+        waarde = int(getal.group(1))
+        if waarde > 10 ** 12:
+            waarde //= 1000
+        moment = datetime.datetime.fromtimestamp(waarde, tz=datetime.timezone.utc)
+        ams = moment.astimezone(zone)
+        return {"naam": "unixtijd", "bron": bron,
+                "tekst": (f"Tijdstempel {waarde} is {ams.strftime('%d-%m-%Y %H:%M')} in Nederland "
+                          f"({moment.strftime('%Y-%m-%dT%H:%M:%SZ')} UTC).")}
+    datum = _datum_uit(verzoek)
+    if not datum:
+        return {"naam": "unixtijd", "bron": bron, "tekst": "",
+                "fout": "noem een tijdstempel van 10 cijfers of een datum, bijvoorbeeld '13-11-2026'"}
+    uur, minuut = 0, 0
+    klok = re.search(r"\b(\d{1,2})[:.](\d{2})\b", verzoek)
+    if klok and int(klok.group(1)) <= 23 and int(klok.group(2)) <= 59:
+        uur, minuut = int(klok.group(1)), int(klok.group(2))
+    begin = datetime.datetime(datum.year, datum.month, datum.day, uur, minuut, tzinfo=zone)
+    einde = begin + datetime.timedelta(days=1) if (uur, minuut) == (0, 0) else begin
+    if einde == begin:
+        return {"naam": "unixtijd", "bron": bron,
+                "tekst": (f"{begin.strftime('%d-%m-%Y %H:%M')} in Nederland is tijdstempel "
+                          f"{int(begin.timestamp())} (UTC: {begin.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}).")}
+    return {"naam": "unixtijd", "bron": bron,
+            "tekst": (f"{datum.isoformat()} begint in Nederland om tijdstempel {int(begin.timestamp())} en "
+                      f"eindigt om {int(einde.timestamp()) - 1} "
+                      f"({int(einde.timestamp())} is al de volgende dag).")}
+
+
+def gereedschap_bestandsgrootte(argument: str) -> dict:
+    """Bytes omrekenen naar kB, MB, GB, TB, KiB, MiB en GiB (eigen code)."""
+    laag = (argument or "").strip().lower().replace(",", ".")
+    if not laag:
+        return {"naam": "bestandsgrootte", "bron": "de engine zelf", "tekst": "",
+                "fout": "noem een grootte, bijvoorbeeld '1,5 GB in MB' of 'hoeveel MB is 3000000 bytes'"}
+    treffer = re.search(r"(\d+(?:\.\d+)?)\s*([a-z]{0,3})", laag)
+    if not treffer:
+        return {"naam": "bestandsgrootte", "bron": "de engine zelf", "tekst": "",
+                "fout": "ik zie geen getal in de vraag"}
+    waarde = float(treffer.group(1))
+    maat = treffer.group(2)
+    factoren = {"": 1, "b": 1, "byte": 1, "bytes": 1, "kb": 1000, "k": 1000, "mb": 10 ** 6,
+                "m": 10 ** 6, "gb": 10 ** 9, "g": 10 ** 9, "tb": 10 ** 12, "t": 10 ** 12,
+                "kib": 1024, "mib": 1024 ** 2, "gib": 1024 ** 3, "tib": 1024 ** 4}
+    if maat not in factoren:
+        return {"naam": "bestandsgrootte", "bron": "de engine zelf", "tekst": "",
+                "fout": f"'{maat}' ken ik niet; ik ken bytes, kB, MB, GB, TB (1000) en KiB, MiB, GiB, TiB (1024)"}
+    aantal_bytes = waarde * factoren[maat]
+    regels = [f"{_getal(aantal_bytes / factor)} {eenheid}"
+              for eenheid, factor in (("TB", 10 ** 12), ("GB", 10 ** 9), ("MB", 10 ** 6), ("kB", 1000))
+              if aantal_bytes / factor >= 1]
+    binair = []
+    for eenheid, factor in (("TiB", 1024 ** 4), ("GiB", 1024 ** 3), ("MiB", 1024 ** 2), ("KiB", 1024)):
+        if aantal_bytes / factor >= 1:
+            binair.append(f"{_getal(aantal_bytes / factor)} {eenheid}")
+            break
+    return {
+        "naam": "bestandsgrootte",
+        "bron": "de engine zelf",
+        "tekst": (f"{_getal(waarde)} {maat or 'bytes'} is {int(round(aantal_bytes))} bytes = "
+                  + " = ".join(regels[:3] or ["minder dan 1 kB"])
+                  + (f". Binair gerekend (1024) is dat {binair[0]}" if binair else "")
+                  + ". Schijven en providers rekenen met 1000, besturingssystemen vaak met 1024: "
+                    "1 GB is 1000 MB, maar 1 GiB is 1024 MiB."),
+    }
+
+
+def gereedschap_serverstatus(argument: str) -> dict:
+    """Geheugen, schijfruimte, belasting en temperatuur van de eigen server."""
+    bron = "deze machine (/proc en /sys)"
+    delen = []
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as bestand:
+            meminfo = {}
+            for regel in bestand:
+                sleutel, _, waarde = regel.partition(":")
+                meminfo[sleutel.strip()] = waarde.strip()
+        totaal = float(meminfo.get("MemTotal", "0").split()[0]) / 1048576
+        vrij = float(meminfo.get("MemAvailable", "0").split()[0]) / 1048576
+        wissel = float(meminfo.get("SwapTotal", "0").split()[0]) / 1048576
+        wissel_vrij = float(meminfo.get("SwapFree", "0").split()[0]) / 1048576
+        delen.append(f"geheugen {_getal(vrij)} van {_getal(totaal)} GB vrij")
+        if wissel:
+            delen.append(f"wisselgeheugen {_getal(wissel_vrij)} van {_getal(wissel)} GB vrij")
+    except Exception:
+        pass
+    try:
+        schijf = shutil.disk_usage("/")
+        procent = schijf.used / schijf.total * 100 if schijf.total else 0
+        delen.append(f"schijf / {_getal(schijf.free / 1073741824)} GB vrij van "
+                     f"{_getal(schijf.total / 1073741824)} GB ({_getal(procent, '%')} vol)")
+    except Exception:
+        pass
+    try:
+        with open("/proc/loadavg", encoding="utf-8") as bestand:
+            last = bestand.read().split()
+        kernen = os.cpu_count() or 1
+        rust = "rustig" if float(last[0]) < kernen * 0.7 else (
+            "druk" if float(last[0]) < kernen * 1.5 else "overbelast")
+        delen.append(f"belasting {last[0]}, {last[1]}, {last[2]} op {kernen} kernen ({rust})")
+    except Exception:
+        pass
+    try:
+        with open("/proc/uptime", encoding="utf-8") as bestand:
+            seconden = float(bestand.read().split()[0])
+        dagen, rest = divmod(int(seconden), 86400)
+        delen.append(f"aan sinds {dagen} dagen en {rest // 3600} uur")
+    except Exception:
+        pass
+    try:
+        metingen = []
+        for pad in Path("/sys/class/thermal").glob("thermal_zone*/temp"):
+            try:
+                metingen.append(int(pad.read_text().strip()) / 1000)
+            except Exception:
+                continue
+        for pad in Path("/sys/class/hwmon").glob("hwmon*/temp*_input"):
+            try:
+                waarde = int(pad.read_text().strip()) / 1000
+                if -50 < waarde < 150:
+                    metingen.append(waarde)
+            except Exception:
+                continue
+        if metingen:
+            delen.append(f"temperatuur {_getal(max(metingen))} °C")
+    except Exception:
+        pass
+    try:
+        processen = len([naam for naam in os.listdir("/proc") if naam.isdigit()])
+        delen.append(f"{processen} processen")
+    except Exception:
+        pass
+    if not delen:
+        return {"naam": "serverstatus", "bron": bron, "tekst": "",
+                "fout": "deze machine geeft geen systeemgegevens vrij (draait dit niet op Linux?)"}
+    return {"naam": "serverstatus", "bron": bron,
+            "tekst": "Status van deze server: " + "; ".join(delen) + "."}
+
+
 # Welke route bij welk gereedschap hoort: (/api/<naam>?q=...)
 GEREEDSCHAP_ROUTES = {
     "rekenen": (gereedschap_rekenen, "q"),
@@ -7210,6 +13474,139 @@ GEREEDSCHAP_ROUTES = {
     "afval ophalen": (gereedschap_afval_ophalen, "plaats"),
     "zon op je dak": (gereedschap_zon_op_je_dak, "plaats"),
     "bereikbaarheid": (gereedschap_bereikbaarheid, "plaats"),
+    "bmi en gezond gewicht": (gereedschap_bmi, "q"),
+    "hartslagzones": (gereedschap_hartslagzones, "q"),
+    "stappen naar kilometers": (gereedschap_stappen, "q"),
+    "e-nummers": (gereedschap_e_nummers, "q"),
+    "aed in de buurt": (gereedschap_aed, "plaats"),
+    "apotheken in de buurt": (gereedschap_apotheken, "plaats"),
+    "huisartsenpost": (gereedschap_huisartsenpost, "plaats"),
+    "tekenbeet en lyme": (gereedschap_tekenbeet, "q"),
+    "reisvaccinaties": (gereedschap_reisvaccinaties, "q"),
+    "bloeddonatie": (gereedschap_bloeddonatie, "q"),
+    "psychische hulp": (gereedschap_psychische_hulp, ""),
+    "openingstijden winkel": (gereedschap_openingstijden_winkel, "q"),
+    "kinderopvang": (gereedschap_kinderopvang, "plaats"),
+    "scholen in de buurt": (gereedschap_scholen, "plaats"),
+    "speeltuinen en parken": (gereedschap_speeltuinen, "plaats"),
+    "honden uitlaatplekken": (gereedschap_honden_uitlaatplekken, "plaats"),
+    "geldautomaat": (gereedschap_geldautomaat, "plaats"),
+    "brievenbus": (gereedschap_brievenbus, "plaats"),
+    "glasbak en afvalpunt": (gereedschap_glasbak, "plaats"),
+    "bibliotheek en zwembad": (gereedschap_bibliotheek_en_zwembad, "plaats"),
+    "bestemmingsplan": (gereedschap_bestemmingsplan, "q"),
+    "leefbaarheid buurt": (gereedschap_leefbaarheid_buurt, "plaats"),
+    "energielabel woning": (gereedschap_energielabel, "q"),
+    "bouwprojecten": (gereedschap_bouwprojecten, "plaats"),
+    "gevoelstemperatuur": (gereedschap_gevoelstemperatuur, "plaats"),
+    "dauwpunt": (gereedschap_dauwpunt, "plaats"),
+    "zicht": (gereedschap_zicht, "plaats"),
+    "sneeuw": (gereedschap_sneeuw, "plaats"),
+    "windrichting": (gereedschap_windrichting, "plaats"),
+    "fijnstof": (gereedschap_fijnstof, "plaats"),
+    "poollicht": (gereedschap_poollicht, "q"),
+    "ruimteweer": (gereedschap_ruimteweer, "q"),
+    "iss": (gereedschap_issplaats, "q"),
+    "maanopkomst": (gereedschap_maanopkomst, "plaats"),
+    "rivierafvoer": (gereedschap_rivierafvoer, "q"),
+    "bodemvocht": (gereedschap_bodemvocht, "plaats"),
+    "graaddagen": (gereedschap_graaddagen, "plaats"),
+    "zonuren": (gereedschap_zonuren, "plaats"),
+    "kenteken": (gereedschap_kenteken, "q"),
+    "apk": (gereedschap_apk, "q"),
+    "brandstofverbruik": (gereedschap_brandstofverbruik, "q"),
+    "terugroepacties": (gereedschap_terugroepacties, "q"),
+    "files nu": (gereedschap_files_nu, "q"),
+    "ns verstoringen": (gereedschap_ns_verstoringen, "q"),
+    "halte": (gereedschap_halte, "plaats"),
+    "verkeersboetes": (gereedschap_verkeersboetes, "q"),
+    "vliegtuig": (gereedschap_vliegtuig, "q"),
+    "schip": (gereedschap_schip, "q"),
+    "occasions": (gereedschap_occasions, "q"),
+    "laadpunten": (gereedschap_laadpunten, "plaats"),
+    "veerboottijden": (gereedschap_veerboottijden, "plaats"),
+    "maandlasten hypotheek": (gereedschap_maandlasten, "q"),
+    "dividend en rendement": (gereedschap_dividend, "q"),
+    "beursindices": (gereedschap_beursindices, "q"),
+    "grondstofprijzen": (gereedschap_grondstoffen, "q"),
+    "gasprijs ttf": (gereedschap_gasprijs_ttf, "q"),
+    "crypto omrekenen": (gereedschap_crypto_omrekenen, "q"),
+    "box 3 berekenen": (gereedschap_box3, "q"),
+    "vakantiegeld": (gereedschap_vakantiegeld, "q"),
+    "lease bijtelling": (gereedschap_bijtelling, "q"),
+    "goedkoopste pomp": (gereedschap_goedkoopste_pomp, "plaats"),
+    "huurwoningen": (gereedschap_huurwoningen, "plaats"),
+    "inflatie per productgroep": (gereedschap_inflatie_productgroep, "q"),
+    "koopkracht berekenen": (gereedschap_koopkracht, "q"),
+    "toeslagen checken": (gereedschap_toeslagen, "q"),
+    "aow leeftijd": (gereedschap_aow, "q"),
+    "gemeentelijke lasten": (gereedschap_gemeentelast, "plaats"),
+    "raadsbesluiten": (gereedschap_raadsbesluiten, "q"),
+    "moties en amendementen": (gereedschap_moties, "q"),
+    "vergaderagenda kamer": (gereedschap_vergaderagenda, "q"),
+    "stemmingen": (gereedschap_stemmingen, "q"),
+    "staatscourant": (gereedschap_staatscourant, "q"),
+    "open data register": (gereedschap_opendata_register, "q"),
+    "eur-lex": (gereedschap_eurlex, "q"),
+    "reisadviezen": (gereedschap_reisadvies, "q"),
+    "ambassades": (gereedschap_ambassade, "q"),
+    "oorlogsbronnen": (gereedschap_oorlogsbronnen, "q"),
+    "archief zoeken": (gereedschap_archief, "q"),
+    "paspoort en id": (gereedschap_paspoort, "q"),
+    "uittreksel brp": (gereedschap_uittreksel, "q"),
+    "aankomende verkiezingen": (gereedschap_verkiezingen_aankomend, "q"),
+    "etymologie": (gereedschap_etymologie, "q"),
+    "de of het": (gereedschap_lidwoord, "q"),
+    "meervoud": (gereedschap_meervoud, "q"),
+    "anagrammen": (gereedschap_anagrammen, "q"),
+    "lettergrepen": (gereedschap_lettergrepen, "q"),
+    "spreekwoorden": (gereedschap_spreekwoorden, "q"),
+    "citaten van een persoon": (gereedschap_citaten_persoon, "q"),
+    "liedteksten": (gereedschap_liedteksten, "q"),
+    "artiesteninfo": (gereedschap_artiesteninfo, "q"),
+    "series": (gereedschap_series, "q"),
+    "musea": (gereedschap_musea, "plaats"),
+    "monumenten": (gereedschap_monumenten, "plaats"),
+    "bergtoppen": (gereedschap_bergtoppen, "q"),
+    "vlaggen": (gereedschap_vlaggen, "q"),
+    "wiskunde": (gereedschap_wiskunde, "q"),
+    "statistiek": (gereedschap_statistiek, "q"),
+    "romeinse cijfers": (gereedschap_romeins, "q"),
+    "weeknummers": (gereedschap_weeknummer, "q"),
+    "bieb zoeken": (gereedschap_bieb, "q"),
+    "tijdlijn": (gereedschap_tijdlijn, "q"),
+    "formule 1": (gereedschap_formule1, "q"),
+    "voetbalstanden": (gereedschap_voetbalstanden, "q"),
+    "eredivisie programma": (gereedschap_eredivisie_programma, "q"),
+    "wielrennen": (gereedschap_wielrennen, "q"),
+    "olympische medailles": (gereedschap_olympische_medailles, "q"),
+    "podcast afleveringen": (gereedschap_podcast_afleveringen, "q"),
+    "youtube zoeken": (gereedschap_youtube_zoeken, "q"),
+    "kranten voorpagina": (gereedschap_kranten_voorpagina, "q"),
+    "mediawijsheid": (gereedschap_mediawijsheid, "q"),
+    "streaming": (gereedschap_streaming, "q"),
+    "concerten": (gereedschap_concerten, "plaats"),
+    "evenementenkalender": (gereedschap_evenementenkalender, "plaats"),
+    "ip": (gereedschap_ip, "q"),
+    "dns": (gereedschap_dns, "q"),
+    "ssl": (gereedschap_ssl, "q"),
+    "github": (gereedschap_github, "q"),
+    "npm": (gereedschap_npm, "q"),
+    "pypi": (gereedschap_pypi, "q"),
+    "docker": (gereedschap_docker, "q"),
+    "cve": (gereedschap_cve, "q"),
+    "wachtwoordlek": (gereedschap_wachtwoordlek, "q"),
+    "wayback": (gereedschap_wayback, "q"),
+    "qr": (gereedschap_qr, "q"),
+    "kortelink": (gereedschap_kortelink, "q"),
+    "linuxcommando": (gereedschap_linuxcommando, "q"),
+    "cron": (gereedschap_cron, "q"),
+    "schermafdruk": (gereedschap_schermafdruk, "q"),
+    "uuid": (gereedschap_uuid, "q"),
+    "json": (gereedschap_json, "q"),
+    "unixtijd": (gereedschap_unixtijd, "q"),
+    "bestandsgrootte": (gereedschap_bestandsgrootte, "q"),
+    "serverstatus": (gereedschap_serverstatus, "q"),
 }
 
 
@@ -7359,6 +13756,139 @@ GEREEDSCHAP_SOORTEN = {
     "afval ophalen": "wanneer het afval aan de straat moet",
     "zon op je dak": "hoeveel zon je dak vangt",
     "bereikbaarheid": "hoeveel ov er in de buurt is (openstreetmap)",
+    "bmi en gezond gewicht": "je BMI uit gewicht en lengte, met de gewone bereiken en een verwijzing naar de huisarts",
+    "hartslagzones": "geschatte hartslagzones op basis van je leeftijd, nadrukkelijk geen medisch advies",
+    "stappen naar kilometers": "stappen omrekenen naar kilometers of andersom, met een aanname voor de staplengte",
+    "e-nummers": "wat een E-nummer betekent, met de uitleg van food-info.net erbij",
+    "aed in de buurt": "waar de dichtstbijzijnde defibrillator hangt (openstreetmap)",
+    "apotheken in de buurt": "waar de dichtstbijzijnde apotheken zijn, met openingstijden",
+    "huisartsenpost": "huisartsenpraktijken en klinieken in de buurt, met tijden en het nummer 112",
+    "tekenbeet en lyme": "wat je bij een tekenbeet doet volgens het RIVM, en wanneer naar de huisarts",
+    "reisvaccinaties": "waar je het officiele advies per land vindt (LCR en GGD), geen vaccinatieadvies op maat",
+    "bloeddonatie": "waar je bloed kunt geven en hoe je donor wordt (Sanquin)",
+    "psychische hulp": "waar je terechtkomt als het psychisch niet goed gaat: 113, en 112 bij gevaar",
+    "openingstijden winkel": "wanneer winkels in de buurt open zijn, per soort winkel (openstreetmap)",
+    "kinderopvang": "waar kinderdagverblijven en bso's zijn, met het Landelijk Register erbij",
+    "scholen in de buurt": "welke scholen er dichtbij zijn (openstreetmap), en waar je ze kunt vergelijken",
+    "speeltuinen en parken": "speeltuinen en parken in de buurt om met kinderen naartoe te gaan",
+    "honden uitlaatplekken": "waar de hond los mag lopen (openstreetmap), met de regels van de gemeente erbij",
+    "geldautomaat": "waar de dichtstbijzijnde pinautomaat is (openstreetmap)",
+    "brievenbus": "waar je een brief kunt posten, met de leegtijden als die bekend zijn",
+    "glasbak en afvalpunt": "waar je glas, papier en textiel kwijt kunt (openstreetmap)",
+    "bibliotheek en zwembad": "waar de bibliotheek en het zwembad in de buurt zijn (openstreetmap)",
+    "bestemmingsplan": "waar je de regels voor bouwen op een adres vindt (Omgevingsloket, ruimtelijkeplannen)",
+    "leefbaarheid buurt": "hoe leefbaar de buurt scoort volgens de Leefbaarometer (meting 2024)",
+    "energielabel woning": "hoe je het energielabel van een woning opzoekt in EP-Online (met API-sleutel)",
+    "bouwprojecten": "wat er in de buurt gebouwd wordt, uit de nieuwsberichten",
+    "gevoelstemperatuur": "hoe koud het voelt, met wind en vocht meegerekend (open-meteo.com)",
+    "dauwpunt": "luchtvochtigheid en dauwpunt per uur (open-meteo.com)",
+    "zicht": "hoe ver je kunt kijken en of er mist hangt (open-meteo.com)",
+    "sneeuw": "sneeuwval en sneeuwgrens (open-meteo.com)",
+    "windrichting": "uit welke hoek de wind komt, per uur (open-meteo.com)",
+    "fijnstof": "fijnstof (PM10, PM2,5) en stikstofdioxide (open-meteo.com)",
+    "poollicht": "de Kp-index en de kans op noorderlicht (NOAA SWPC)",
+    "ruimteweer": "zonnewind, magneetveld en zonnevlekken (NOAA SWPC)",
+    "iss": "waar het ruimtestation nu hangt (api.wheretheiss.at)",
+    "maanopkomst": "maanopkomst en maanondergang (api.met.no)",
+    "rivierafvoer": "hoeveel water de Rijn en de Maas afvoeren (rijkswaterstaat.nl)",
+    "bodemvocht": "hoe nat de bodem is, voor tuin en landbouw (open-meteo.com)",
+    "graaddagen": "hoe koud het stookseizoen tot nu toe was (open-meteo archief)",
+    "zonuren": "hoeveel uur de zon al scheen (open-meteo.com)",
+    "kenteken": "merk, model, bouwjaar en APK-datum bij een kenteken (RDW open data)",
+    "apk": "wanneer de APK van een kenteken verloopt (RDW open data)",
+    "brandstofverbruik": "brandstofsoort en emissieklasse bij een kenteken (RDW open data)",
+    "terugroepacties": "openstaande terugroepacties bij een kenteken (RDW open data)",
+    "files nu": "waar het nu vastloopt, met filelengte en vertraging (NDW/Rijkswaterstaat)",
+    "ns verstoringen": "storingen en werkzaamheden op het spoor (Google Nieuws)",
+    "halte": "de dichtstbijzijnde bushalte met de lijnen erbij (openstreetmap.org)",
+    "verkeersboetes": "wat een overtreding kost (Openbaar Ministerie/CJIB)",
+    "vliegtuig": "welk toestel bij een registratie of Mode-S-code hoort (adsbdb.com en hexdb.io)",
+    "schip": "een schip op MMSI of het vaarwater bij een plaats (ITU/openstreetmap.org)",
+    "occasions": "tweedehands auto's met prijs en kilometerstand (marktplaats.nl)",
+    "laadpunten": "welke laadpalen snel laden, met vermogen (openstreetmap.org)",
+    "veerboottijden": "welke veerponten er varen; tijden staan er zelden in (openstreetmap.org)",
+    "maandlasten hypotheek": "wat een hypotheek per maand kost, met rente en looptijd (eigen berekening)",
+    "dividend en rendement": "wat een aandeel aan dividend uitkeert (Yahoo Finance)",
+    "beursindices": "hoe de AEX, S&P 500, Dow en Nasdaq ervoor staan (Yahoo Finance)",
+    "grondstofprijzen": "de prijs van goud, zilver, olie en koper (Yahoo Finance)",
+    "gasprijs ttf": "de groothandelsprijs voor gas op de TTF-markt (Yahoo Finance)",
+    "crypto omrekenen": "een bedrag in bitcoin of ethereum omrekenen naar euro (CoinGecko)",
+    "box 3 berekenen": "wat je aan vermogensbelasting betaalt (eigen berekening, tarieven 2026)",
+    "vakantiegeld": "wat je bruto aan vakantiegeld krijgt (eigen berekening, 8%)",
+    "lease bijtelling": "wat een leaseauto per jaar aan bijtelling kost (eigen berekening, tarieven 2026)",
+    "goedkoopste pomp": "waar je in de buurt kunt tanken, met de landelijke pompprijzen (OpenStreetMap en CBS)",
+    "huurwoningen": "waar je huurwoningen in een plaats vindt (Pararius blokkeert; met links)",
+    "inflatie per productgroep": "welke productgroepen het hardst in prijs stegen (CBS)",
+    "koopkracht berekenen": "wat je salaris in koopkracht doet, met de CBS-inflatie erbij (eigen berekening)",
+    "toeslagen checken": "of je recht hebt op huur- of zorgtoeslag (Dienst Toeslagen)",
+    "aow leeftijd": "wanneer je AOW krijgt en hoe hoog die is (SVB en de overheidsrepository)",
+    "gemeentelijke lasten": "wat je gemeente aan OZB, rioolheffing en afvalstoffenheffing begroot (CBS)",
+    "raadsbesluiten": "wat gemeenteraden onlangs hebben besloten (Gemeenteblad via repository.overheid.nl)",
+    "moties en amendementen": "welke moties en amendementen er in de Kamer lopen (via Google Nieuws)",
+    "vergaderagenda kamer": "wat er in de Tweede Kamer op de agenda staat (tweedekamer.nl)",
+    "stemmingen": "hoe er in de Tweede Kamer gestemd is (tweedekamer.nl)",
+    "staatscourant": "de officiële bekendmakingen van de laatste dagen (Staatscourant via repository.overheid.nl)",
+    "open data register": "welke datasets de overheid openbaar heeft (data.overheid.nl)",
+    "eur-lex": "Europese wetten en verordeningen zoeken (EUR-Lex, met links)",
+    "reisadviezen": "hoe veilig een land is om naartoe te reizen (Nederland Wereldwijd, open data)",
+    "ambassades": "welke ambassade of welk consulaat bij een land hoort (Nederland Wereldwijd, open data)",
+    "oorlogsbronnen": "documenten over de Tweede Wereldoorlog zoeken (Oorlogsbronnen, met links)",
+    "archief zoeken": "stukken in het Nationaal Archief zoeken (nationaalarchief.nl, met links)",
+    "paspoort en id": "wat je nodig hebt voor een paspoort of ID-kaart (Rijksoverheid)",
+    "uittreksel brp": "een uittreksel van het BRP of de burgerlijke stand aanvragen (Rijksoverheid)",
+    "aankomende verkiezingen": "wanneer je mag stemmen en waarvoor (Kiesraad, met nieuws)",
+    "etymologie": "waar een woord vandaan komt (wiktionary)",
+    "de of het": "welk lidwoord bij een woord hoort (wiktionary)",
+    "meervoud": "het meervoud en het verkleinwoord van een woord (wiktionary)",
+    "anagrammen": "woorden van dezelfde letters (OpenTaal-woordenlijst, zonder internet)",
+    "lettergrepen": "een woord in lettergrepen verdelen (wiktionary, anders een vuistregel)",
+    "spreekwoorden": "wat een spreekwoord betekent (wiktionary)",
+    "citaten van een persoon": "wat iemand zelf gezegd heeft (wikiquote)",
+    "liedteksten": "de tekst van een lied (lyrics.ovh)",
+    "artiesteninfo": "wie een band of zanger is (musicbrainz)",
+    "series": "waar een tv-serie over gaat (tvmaze)",
+    "musea": "welke musea er in een stad zijn (openstreetmap, anders wikipedia)",
+    "monumenten": "welke rijksmonumenten er bij een plaats staan (wikipedia-lijst, bron RCE)",
+    "bergtoppen": "hoe hoog een berg is en waar die ligt (wikidata)",
+    "vlaggen": "hoe de vlag van een land eruitziet (wikipedia, anders wikidata)",
+    "wiskunde": "een vergelijking of percentage uitrekenen (de engine zelf, zonder internet)",
+    "statistiek": "gemiddelde, mediaan en spreiding van een reeks getallen (de engine zelf)",
+    "romeinse cijfers": "een getal omzetten naar Romeinse cijfers en andersom (de engine zelf)",
+    "weeknummers": "welke week, welk kwartaal en welke dag van het jaar het is (de engine zelf)",
+    "bieb zoeken": "of een boek in de catalogus van de openbare bibliotheken staat (KB/GGC)",
+    "tijdlijn": "wat er in een jaar gebeurde (wikipedia-jaaroverzicht)",
+    "formule 1": "uitslagen, standen en de kalender van de Formule 1 (Jolpica)",
+    "voetbalstanden": "de stand in de eredivisie: het laatste nieuws (Google Nieuws)",
+    "eredivisie programma": "het speelschema van de eredivisie met uitslagen en de eerstvolgende duels (openfootball)",
+    "wielrennen": "het laatste wielernieuws en de uitslagen (Google Nieuws)",
+    "olympische medailles": "samenvatting en medaillespiegel van de Olympische Spelen (Wikipedia)",
+    "podcast afleveringen": "de nieuwste afleveringen van een podcast (iTunes en de feed van de maker)",
+    "youtube zoeken": "filmpjes zoeken op YouTube met titel, kanaal en link",
+    "kranten voorpagina": "de voorpagina's van de kranten van vandaag (frontpages.com)",
+    "mediawijsheid": "checklist om een bericht te wegen plus recente factchecks (eigen naslag en Google Nieuws)",
+    "streaming": "bij welke streamingdienst een film of serie te zien is (zoeklink van JustWatch)",
+    "concerten": "muziekpodia en concertzalen in de buurt (OpenStreetMap)",
+    "evenementenkalender": "wat er te doen is in een gemeente (Google Nieuws)",
+    "ip": "van welk land, welke regio en welke provider een IP-adres is (ipapi.co)",
+    "dns": "de DNS-records van een domein: A, AAAA, MX, TXT en NS (dns.google)",
+    "ssl": "wanneer de certificaten van een site verlopen (crt.sh en certspotter)",
+    "github": "sterren, taal en laatste update van een GitHub-project (60 verzoeken per uur zonder sleutel)",
+    "npm": "de laatste versie en omschrijving van een npm-pakket (registry.npmjs.org)",
+    "pypi": "de laatste versie en omschrijving van een Python-pakket (PyPI)",
+    "docker": "welke tags en versies een Docker-image heeft (Docker Hub)",
+    "cve": "bekende beveiligingslekken (CVE's) bij software of een CVE-nummer (NVD)",
+    "wachtwoordlek": "of een wachtwoord in een datalek voorkomt (Pwned Passwords, k-anonimiteit)",
+    "wayback": "hoe een site er vroeger uitzag (Internet Archive)",
+    "qr": "een QR-code maken bij een link of tekst (api.qrserver.com)",
+    "kortelink": "een lange link kort maken (TinyURL)",
+    "linuxcommando": "wat een Linux-commando doet, met voorbeelden (cheat.sh)",
+    "cron": "wat een cron-expressie betekent (eigen ontleder en crontab.guru)",
+    "schermafdruk": "een plaatje van een webpagina laten maken (image.thum.io)",
+    "uuid": "een UUID of een sterk wachtwoord maken (eigen code, os.urandom)",
+    "json": "rommelige JSON netjes leesbaar of juist compact maken (eigen code)",
+    "unixtijd": "een tijdstempel of datum omrekenen (eigen code)",
+    "bestandsgrootte": "bytes omrekenen naar kB, MB, GB en KiB, MiB, GiB (eigen code)",
+    "serverstatus": "geheugen, schijfruimte, belasting en temperatuur van de eigen server (eigen code)",
 }
 
 
@@ -7492,6 +14022,274 @@ def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
                 argument = GEREEDSCHAP_PLAATS
             return [(soort, argument)]
 
+    # ---- nieuwe gereedschappen (ronde 8) ----
+    if re.search(r"\b(bmi|lichaamsmassa-?index|gezond gewicht|ideaalgewicht|overgewicht|ondergewicht)\b", laag):
+        return [("bmi en gezond gewicht", tekst)]
+    if re.search(r"\bhartslagzones?\b|\bmaximale hartslag\b|\bhartslag tijdens het sporten\b|\bhf-?zones?\b", laag):
+        return [("hartslagzones", tekst)]
+    if re.search(r"\b\d[\d.]{2,}\s*(?:duizend\s+)?stappen\b|\bhoeveel stappen\b|\bstappen naar (?:km|kilometer)\b|\bstappen in (?:km|kilometer)\b|\bstappenteller\b|\bstappen per (?:dag|kilometer|km)\b|\bduizend stappen\b|\btienduizend stappen\b|\bstappen\b", laag):
+        return [("stappen naar kilometers", tekst)]
+    if re.search(r"\be-?nummers?\b|\bwat (?:is|betekent|doet) e-?\s?\d{3}[a-z]?\b|\be\d{3}[a-z]?\b|\badditieven\b|\bkleurstoffen?\b|\bconserveermiddelen?\b", laag):
+        return [("e-nummers", tekst)]
+    if re.search(r"\b(aed|defibrillator|defibrillators)\b", laag):
+        return [("aed in de buurt", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\bapothe(?:ek|ken)\b|\bdienstapotheek\b", laag):
+        return [("apotheken in de buurt", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\bhuisartsenpost\w*\b|\bdokterspost\w*\b|\bspoedpost\w*\b|\bhuisartsen?praktijk\w*\b|\bhuisarts\w*\b.{0,25}\b(?:buurt|dichtbij|omgeving)\b", laag):
+        return [("huisartsenpost", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\btekenbeet\b|\btekenbeten\b|\bteek\b|\bteken verwijderen\b|\bziekte van lyme\b|\blyme\b", laag):
+        return [("tekenbeet en lyme", tekst)]
+    if re.search(r"\breisvaccinaties?\b|\bwelke vaccinaties?\b|\bvaccinaties? (?:nodig|voor|op reis)\b|\bmalaria\w*\b|\bgele koorts\b|\bdengue\b|\bvaccinatiebureau\b|\bprikken voor (?:de|een|mijn) reis\b|\bwelke prikken\b|\bprikken nodig\b", laag):
+        return [("reisvaccinaties", tekst)]
+    if re.search(r"\bbloeddonatie\b|\bbloed (?:geven|doneren)\b|\bdonor worden\b|\bsanquin\b|\bbloedbank\b", laag):
+        return [("bloeddonatie", tekst)]
+    if re.search(r"\bzelfmoord\w*\b|\bsu[iï]cide\w*\b|\bpsychische (?:hulp|nood)\b|\bgeestelijke gezondheidszorg\b|\bggz\b|\bdepressief\b", laag):
+        return [("psychische hulp", "")]
+    if re.search(r"\bopeningstijden\b(?!.{0,25}(?:bibliotheek|bieb|zwembad))|\bwanneer is (?:de|een|het)\s+\w+ open\b|\btot hoe laat is\b.{0,25}\bopen\b|\bhoe laat gaat\b.{0,25}\bopen\b", laag):
+        return [("openingstijden winkel", tekst)]
+    if re.search(r"\bkinderopvang\b|\bkinderdagverblijf\w*\b|\bkdv\b|\bbso\b|\bcr[eè]che\b|\bpeuterspeelzaal\w*\b|\b(?:na|buiten)schoolse opvang\b", laag):
+        return [("kinderopvang", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\bbasisscholen?\b|\bmiddelbare school\b|\bscholen\b.{0,25}\b(?:buurt|omgeving|dichtbij|nabij)\b|\b(?:buurt|omgeving|dichtbij|nabij)\b.{0,25}\bscholen?\b|\bscholen? in de buurt\b", laag):
+        return [("scholen in de buurt", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\bspeeltuin\w*\b|\bspeelplaats\w*\b|\bspeelplek\w*\b|\bspeelveld\w*\b|\bparken in de buurt\b|\bpark\b.{0,25}\bin de buurt\b", laag):
+        return [("speeltuinen en parken", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\buitlaatplek\w*\b|\bhonden?losloop\w*\b|\blosloopgebied\w*\b|\bhonden? uitlaten\b|\bhondenpark\w*\b|\bhond\w*\b.{0,25}(?:loslopen|lopen|uitlaten|los\b)", laag):
+        return [("honden uitlaatplekken", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\bgeldautoma(?:at|ten)\b|\bpinautoma(?:at|ten)\b|\bautomaat\b.{0,20}\bpinnen\b|\bgeld pinnen\b|\bpinnen\b.{0,20}\bbuurt\b|\bgeld opnemen\b", laag):
+        return [("geldautomaat", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\bbrievenbus\w*\b|\bbrief\b.{0,25}\bposten\b|\bbrieven\b.{0,25}\bposten\b|\bpostzegels?\b", laag):
+        return [("brievenbus", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\bglasbak\w*\b|\bglascontainer\w*\b|\bglas\b.{0,20}\b(?:brengen|wegbrengen|inleveren|inzamelen)\b|\bpapiercontainer\w*\b|\btextielcontainer\w*\b|\bafvalpunt\b|\bafvalbrengstation\b|\bmilieu(?:park|straat)\w*\b", laag):
+        return [("glasbak en afvalpunt", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\b(bibliotheek|bieb)\b.{0,30}\b(?:buurt|dichtbij|omgeving|bij mij|bij ons)\b|\b(?:buurt|dichtbij|omgeving|bij mij|bij ons)\b.{0,30}\b(bibliotheek|bieb)\b|\bzwembad\w*\b|\bzwemmen\b.{0,25}\b(?:buurt|dichtbij)\b", laag):
+        return [("bibliotheek en zwembad", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\bbestemmingsplan\w*\b|\bomgevingsplan\b|\bbouwmogelijkheden\b|\bwat mag ik\b.{0,25}\bbouwen\b", laag):
+        return [("bestemmingsplan", tekst)]
+    if re.search(r"\bleefbaar\w*\b|\bbuurtscore\b", laag):
+        return [("leefbaarheid buurt", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\benergielabels?\b(?!\s?-?adviseur)|\benergieprestatie\w*\b", laag):
+        return [("energielabel woning", tekst)]
+    if re.search(r"\bnieuwbouw\w*\b|\bbouwproject\w*\b|\bbouwplannen\b|\bwat wordt er\b.{0,25}\bgebouwd\b", laag):
+        return [("bouwprojecten", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"gevoelstemperatuur|hoe koud voelt|voelt het (koud|kouder|warmer)|koudegevoel", laag):
+        return [("gevoelstemperatuur", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"dauwpunt|hoe vochtig is de lucht|luchtvochtigheid|vochtigheidsgraad", laag):
+        return [("dauwpunt", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\bzicht\b|zichtbaarheid|hoe ver (?:kun|kan)(?:t)? (?:je|ik) kijken|nevel", laag):
+        return [("zicht", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\bsneeuw|sneeuwgrens|sneeuwval|sneeuwverwachting", laag):
+        return [("sneeuw", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"windrichting|uit welke (hoek|richting)|waar komt de wind vandaan|welke kant waait de wind", laag):
+        return [("windrichting", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"fijnstof|pm10|pm2[.,]?5|stikstofdioxide|\bno2\b", laag):
+        return [("fijnstof", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"poollicht|noorderlicht|aurora|kp[- ]?index", laag):
+        return [("poollicht", "")]
+    if re.search(r"ruimteweer|zonnewind|zonnevlekken|zonneactiviteit|zonnestorm", laag):
+        return [("ruimteweer", "")]
+    if re.search(r"\biss\b|ruimtestation|international space station", laag):
+        return [("iss", "")]
+    if re.search(r"maanopkomst|maanondergang|hoe laat komt de maan|gaat de maan onder|maan op en onder", laag):
+        return [("maanopkomst", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"rivierafvoer|waterafvoer|debiet|afvoer van de (rijn|maas)|hoeveel water voert", laag):
+        return [("rivierafvoer", tekst)]
+    if re.search(r"bodemvocht|bodemvochtigheid|hoe nat is de grond|grondvocht|vochtigheid van de bodem", laag):
+        return [("bodemvocht", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"graaddagen|graad dagen|stookseizoen", laag):
+        return [("graaddagen", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"zonuren|zonneschijnduur|uren zonneschijn|hoeveel uur zon", laag):
+        return [("zonuren", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"\bkenteken\b|kenteken van|welk kenteken", laag):
+        return [("kenteken", tekst)]
+    if re.search(r"\bapk\b|apk-keuring|keuring van mijn auto|wanneer moet de auto gekeurd worden|\bgekeurd\b|\bkeuring\b", laag):
+        return [("apk", tekst)]
+    if re.search(r"brandstofverbruik|verbruik van (een|mijn) auto|co2[- ]?uitstoot|emissieklasse|hoeveel verbruikt", laag):
+        return [("brandstofverbruik", tekst)]
+    if re.search(r"terugroepactie|teruggeroepen|recall", laag):
+        return [("terugroepacties", tekst)]
+    if re.search(r"\bfiles?\b|filemelding|waar staat het vast|staat het (?:verkeer )?vast|stilstaand verkeer", laag):
+        return [("files nu", tekst)]
+    if re.search(r"ns-?storing|treinstoring|storing (op|bij|rond) (het spoor|de ns)|ns werkzaamheden|storingen op het spoor", laag):
+        return [("ns verstoringen", "")]
+    if re.search(r"(dichtstbijzijnde|dichtste|eerstvolgende) (bus)?halte|bushalte (in de buurt|dichtbij)|welke bus stopt|halte bij mij|\bwelke bushalte\b|\bwaar is de bushalte\b", laag):
+        return [("halte", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"verkeersboete|boetebedrag|bekeuring|boete voor|wat kost een boete", laag):
+        return [("verkeersboetes", tekst)]
+    if re.search(r"welk toestel|vliegtuigregistratie|registratie van een vliegtuig|\bph-[a-z]{3}\b|mode-?s-?code", laag):
+        return [("vliegtuig", tekst)]
+    if re.search(r"\bmmsi\b|welk schip|schip opzoeken|waar vaart het schip|ais van een schip", laag):
+        return [("schip", tekst)]
+    if re.search(r"occasions?|tweedehands auto|gebruikte auto|auto zoeken|auto kopen", laag):
+        return [("occasions", tekst)]
+    if re.search(r"laadpunten? met vermogen|snelladen|laadsnelheid|hoeveel kw laadt|laadvermogen van een laadpaal", laag):
+        return [("laadpunten", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"veerboottijden|veerdienst|voetveer|tijden van de pont|wanneer vaart de pont", laag):
+        return [("veerboottijden", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"maandlasten|hypotheeklasten|hypotheek per maand|wat kost (?:een|mijn|de) hypotheek|hypotheek van \d", laag):
+        return [("maandlasten hypotheek", tekst)]
+    if re.search(r"dividend(?:rendement|en)?|hoeveel dividend|dividend van", laag):
+        return [("dividend en rendement", tekst)]
+    if re.search(r"beursindices|beursindex|\baex\b|s&p ?500|dow jones|nasdaq|hoe staat de beurs", laag):
+        return [("beursindices", "")]
+    if re.search(r"grondstofprijzen|goudprijs|zilverprijs|olieprijs|koperprijs|prijs van (?:goud|zilver|olie|koper)", laag):
+        return [("grondstofprijzen", "")]
+    if re.search(r"gasprijs ttf|\bttf\b|groothandelsprijs (?:voor |van )?gas|gasprijs op de beurs|termijnprijs (?:voor|van) gas", laag):
+        return [("gasprijs ttf", "")]
+    if re.search(r"omrekenen.*(?:bitcoin|ethereum|btc|eth)|(?:bitcoin|ethereum|btc|eth) (?:naar|in) euro|\d+(?:[.,]\d+)? (?:bitcoin|ethereum|btc|eth)\b", laag):
+        return [("crypto omrekenen", tekst)]
+    if re.search(r"box ?3|vermogensbelasting|vermogensrendementsheffing|spaartax|fictief rendement", laag):
+        return [("box 3 berekenen", tekst)]
+    if re.search(r"vakantiegeld|vakantiebijslag|vakantie-uitkering", laag):
+        return [("vakantiegeld", tekst)]
+    if re.search(r"bijtelling|auto van de zaak|leaseauto|zakelijke auto", laag):
+        return [("lease bijtelling", tekst)]
+    if re.search(r"goedkoopste pomp|goedkoop tanken|goedkoopste tankstation|waar tank ik het goedkoopst", laag):
+        return [("goedkoopste pomp", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"huurwoning|woning te huur|huurhuis|huurwoningen|iets te huur", laag):
+        return [("huurwoningen", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"inflatie per productgroep|productgroepen|welke producten (?:zijn|werden) (?:het )?duurder|hardst in prijs gestegen|wat is het duurst geworden", laag):
+        return [("inflatie per productgroep", "")]
+    if re.search(r"koopkracht|salarisverhoging|loonsverhoging|inflatiecorrectie|houd ik over van mijn salaris", laag):
+        return [("koopkracht berekenen", tekst)]
+    if re.search(r"toeslagen|zorgtoeslag|huurtoeslag|toeslag aanvragen|proefberekening toeslagen", laag):
+        return [("toeslagen checken", "")]
+    if re.search(r"aow-?leeftijd|\baow\b|wanneer krijg ik aow|pensioenleeftijd|wanneer ga ik met pensioen", laag):
+        return [("aow leeftijd", "")]
+    if re.search(r"\bozb\b|rioolheffing|afvalstoffenheffing|gemeentelijke lasten|gemeentelijke heffingen|woonlasten van", laag):
+        return [("gemeentelijke lasten", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"raadsbesluit|raadsbesluiten|raadsvergadering|wat heeft de gemeenteraad besloten|gemeenteraad.*besloten", laag):
+        return [("raadsbesluiten", tekst)]
+    if re.search(r"\bmoties?\b|amendement", laag):
+        return [("moties en amendementen", "")]
+    if re.search(r"vergaderagenda|agenda van de tweede kamer|wat staat er.*op de agenda|vergaderingen van de tweede kamer|debatten deze week", laag):
+        return [("vergaderagenda kamer", "")]
+    if re.search(r"stemmingsuitslag|waar is over gestemd|hoofdelijke stemming|laatste stemmingen", laag):
+        return [("stemmingen", tekst)]
+    if re.search(r"staatscourant|offici(?:ë|e)le bekendmakingen (?:van|vandaag|van vandaag)", laag):
+        return [("staatscourant", tekst)]
+    if re.search(r"open ?data|openbare datasets|datasets van de overheid|welke datasets", laag):
+        return [("open data register", tekst)]
+    if re.search(r"eur-?lex|celex|europese verordening|eu-richtlijn|europese richtlijn", laag):
+        return [("eur-lex", tekst)]
+    if re.search(r"reisadvies|reisadviezen|veilig om naar .* te reizen|kleurcode van het reisadvies", laag):
+        return [("reisadviezen", tekst)]
+    if re.search(r"ambassade|ambassades|consulaat|consulaten", laag):
+        return [("ambassades", tekst)]
+    if re.search(r"oorlogsbronnen|tweede wereldoorlog|verzetsstrijder|oorlogsarchief|verzet in de", laag):
+        return [("oorlogsbronnen", tekst)]
+    if re.search(r"nationaal archief|archief zoeken|stukken in het archief|archiefstukken|zoeken in het archief", laag):
+        return [("archief zoeken", tekst)]
+    if re.search(r"paspoort|identiteitskaart|id-?kaart", laag):
+        return [("paspoort en id", "")]
+    if re.search(r"uittreksel|\bbrp\b|burgerlijke stand|geboorteakte|bewijs van inschrijving", laag):
+        return [("uittreksel brp", "")]
+    if re.search(r"aankomende verkiezingen|volgende verkiezingen|wanneer (?:mag ik|kan ik|kun je) stemmen|verkiezingsdatum|verkiezingskalender|stembusgang", laag):
+        return [("aankomende verkiezingen", "")]
+    if re.search(r"(etymologie|etymologisch|waar komt (het woord |de |het )?\w+ vandaan|herkomst van (het woord |de |het )?\w+|afkomst van het woord)", laag):
+        return [("etymologie", tekst)]
+    if re.search(r"(de of het|het of de|welk lidwoord|is het de of het|krijgt .{2,20} de of het)", laag):
+        return [("de of het", tekst)]
+    if re.search(r"(meervoud van|meervoudsvorm|verkleinwoord van|meervoud en verkleining|wat is het meervoud)", laag):
+        return [("meervoud", tekst)]
+    if re.search(r"(anagrammen|anagram van|welke woorden kun je maken met de letters|letters omgooien)", laag):
+        return [("anagrammen", tekst)]
+    if re.search(r"(lettergrepen|lettergreep|syllabes|in lettergrepen verdelen)", laag):
+        return [("lettergrepen", tekst)]
+    if re.search(r"(spreekwoorden|spreekwoord|gezegde|wat betekent het spreekwoord)", laag):
+        return [("spreekwoorden", tekst)]
+    if re.search(r"(citaten van|uitspraken van|quotes van|wat heeft \S{2,25} gezegd|wat zei \S{2,25}\b)", laag):
+        return [("citaten van een persoon", tekst)]
+    if re.search(r"(liedtekst|liedteksten|songtekst|lyrics|de tekst van het lied)", laag):
+        return [("liedteksten", tekst)]
+    if re.search(r"(artiesteninfo|informatie over de band|wie is de band|wie is de zanger|wie is de zangeres|over de artiest)", laag):
+        return [("artiesteninfo", tekst)]
+    if re.search(r"(waar gaat de serie|tv-serie|televisieserie|series opzoeken|hoeveel seizoenen heeft)", laag):
+        return [("series", tekst)]
+    if re.search(r"(musea|welke musea|museum|musea in)", laag):
+        return [("musea", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"(rijksmonument|rijksmonumenten|monumenten in de buurt|monumenten in|welke monumenten)", laag):
+        return [("monumenten", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"(bergtoppen|bergtop|hoe hoog is de berg|hoe hoog is de mount|hoogte van de berg|hoe hoog is de \w+berg|mont blanc|hoe hoog is de mont)", laag):
+        return [("bergtoppen", tekst)]
+    if re.search(r"(vlag van|vlaggen|welke vlag|hoe ziet de vlag)", laag):
+        return [("vlaggen", tekst)]
+    if re.search(r"(vergelijking|los op|procent van|percentage van|hoeveel procent)", laag):
+        return [("wiskunde", tekst)]
+    if re.search(r"(statistiek|gemiddelde van|mediaan van|standaardafwijking|spreiding van|wat is de mediaan)", laag):
+        return [("statistiek", tekst)]
+    if re.search(r"(romeinse cijfers|romeins cijfer|in romeinse cijfers|wat is [MDCLXVI]{2,})", laag):
+        return [("romeinse cijfers", tekst)]
+    if re.search(r"(weeknummer|welke week is het|welke week valt|week \d{1,2}\b|in week \d{1,2})", laag):
+        return [("weeknummers", tekst)]
+    if re.search(r"(bieb|bibliotheek|in de bibliotheek|te leen|uitgeleend)", laag):
+        return [("bieb zoeken", tekst)]
+    if re.search(r"(wat gebeurde er in \d{4}|tijdlijn|gebeurtenissen in \d{4}|in het jaar \d{4})", laag):
+        return [("tijdlijn", tekst)]
+    if re.search(r"(?:formule\s?1|formule één|grand prix|\bf1\b|jolpica)", laag):
+        return [("formule 1", tekst)]
+    if re.search(r"(?:stand (?:in|van) de eredivisie|eredivisie\s?stand|voetbalstand|klassement van de eredivisie)", laag):
+        return [("voetbalstanden", tekst)]
+    if re.search(r"(?:eredivisie\s*(?:programma|speelschema)|speelschema|welke (?:voetbal)?wedstrijden|voetbal\s?programma|wedstrijden (?:dit weekend|vanavond))", laag):
+        return [("eredivisie programma", tekst)]
+    if re.search(r"(?:wielrennen|wielerkoers|wieleruitslag|\bkoers\b|tour de france|vuelta|giro d|klassieker)", laag):
+        return [("wielrennen", tekst)]
+    if re.search(r"(?:olympische (?:spelen|medailles|zomerspelen|winterspelen)|medaillespiegel|medailleklassement)", laag):
+        return [("olympische medailles", tekst)]
+    if re.search(r"(?:podcastafleveringen|nieuwste afleveringen|laatste aflevering van de podcast|afleveringen van de podcast)", laag):
+        return [("podcast afleveringen", tekst)]
+    if re.search(r"(?:youtube|you\s?tube|filmpjes?|video zoeken|video's zoeken)", laag):
+        return [("youtube zoeken", tekst)]
+    if re.search(r"(?:voorpagina|kranten van vandaag|front\s?pages)", laag):
+        return [("kranten voorpagina", tekst)]
+    if re.search(r"(?:mediawijsheid|nepnieuws|fake\s?news|factcheck|is dit bericht betrouwbaar|klopt dit bericht)", laag):
+        return [("mediawijsheid", tekst)]
+    if re.search(r"(?:streaming|te streamen|op welke dienst|netflix|disney\+|prime video|hbo max|videoland|streamen)", laag):
+        return [("streaming", tekst)]
+    if re.search(r"(?:concerten|concertzaal|poppodium|muziekpodium|optredens in)", laag):
+        return [("concerten", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"(?:evenementenkalender|uitagenda|wat is er te doen|evenementen in)", laag):
+        return [("evenementenkalender", _plaats_uit(tekst) or GEREEDSCHAP_PLAATS)]
+    if re.search(r"(?:ip-?adres|mijn ip|\bip\b|ipv4|ipv6|welk ip)", laag):
+        return [("ip", tekst)]
+    if re.search(r"(?:\bdns\b|mx-?record|mx record|txt-?record|a-?record|nameserver|ns-?record|spf)", laag):
+        return [("dns", tekst)]
+    if re.search(r"(?:\bssl\b|certificaat|tls-certificaat|https-certificaat)", laag):
+        return [("ssl", tekst)]
+    if re.search(r"(?:github|\brepo\b|repository|sterren op github)", laag):
+        return [("github", tekst)]
+    if re.search(r"(?:\bnpm\b|node-pakket|nodejs-pakket|npm-pakket)", laag):
+        return [("npm", tekst)]
+    if re.search(r"(?:\bpypi\b|pip install|python[\s-]?pakket)", laag):
+        return [("pypi", tekst)]
+    if re.search(r"(?:docker|docker\s?hub|docker-image)", laag):
+        return [("docker", tekst)]
+    if re.search(r"(?:\bcve\b|cve-\d|beveiligingslek|kwetsbaarheid|lek in)", laag):
+        return [("cve", tekst)]
+    if re.search(r"(?:wachtwoordlek|datalek|dataleak|gelekt\w* wachtwoord|pwned|\bgelekt\b)", laag):
+        return [("wachtwoordlek", tekst)]
+    if re.search(r"(?:wayback|internetarchief|internet\s?archief|archive\.org|vroeger uitzag|oude versie van de site|er in \d{4} uitzag|er in \d{4} uit)", laag):
+        return [("wayback", tekst)]
+    if re.search(r"(?:qr[\s-]?code|qrcode)", laag):
+        return [("qr", tekst)]
+    if re.search(r"(?:korte link|link inkorten|tinyurl|verkort\w* (?:de )?link|link kort)", laag):
+        return [("kortelink", tekst)]
+    if re.search(r"(?:linuxcommando|commando.{0,15}uitleg|wat doet het commando|cheat\s?sheet|man-?page)", laag):
+        return [("linuxcommando", tekst)]
+    if re.search(r"(?:\bcron\b|crontab|cronexpressie|cron-expressie|\d+\s+\d+\s+\*)", laag):
+        return [("cron", tekst)]
+    if re.search(r"(?:schermafdruk|screenshot|plaatje van (?:een )?(?:web)?site|afbeelding van de website)", laag):
+        return [("schermafdruk", tekst)]
+    if re.search(r"(?:\buuid\b|\bguid\b|sterk wachtwoord|wachtwoord genereren|wachtwoord maken|unieke code)", laag):
+        return [("uuid", tekst)]
+    if re.search(r"(?:json\s?formatteren|json-?formatter|json\s?minify|\bjson\b)", laag):
+        return [("json", tekst)]
+    if re.search(r"(?:unix\s?tijd|unix-?timestamp|epoch|\btijdstempel\b)", laag):
+        return [("unixtijd", tekst)]
+    if re.search(r"(?:bestandsgrootte|\bbytes?\b|kilobytes?|megabytes?|gigabytes?|hoeveel (?:kb|mb|gb|tb))", laag):
+        return [("bestandsgrootte", tekst)]
+    if re.search(r"(?:serverstatus|schijfruimte|vrije ruimte op de schijf|servertemperatuur|hoe warm is de server|hoe staat de server ervoor)", laag):
+        return [("serverstatus", "")]
+
     # de specifieke gereedschappen eerst, dan de algemene hieronder
     if re.fullmatch(r"[\d\s.,+\-*/x^()]+", laag) or re.search(
         r"^\s*(reken|bereken)\b|\bhoeveel is\b|\bwat is de uitkomst\b|\btel (eens )?op\b|\bdeel door\b", laag
@@ -7529,7 +14327,7 @@ def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
         return [("vertalen", tekst)]
     if re.search(r"\b(van wie is|domein|whois|domeinnaam)\b", laag):
         return [("domein", tekst)]
-    if re.search(r"\b(files?|verkeersinfo|verkeersinformatie|ongeluk|afsluiting|wegwerkzaamheden|verkeer)\b", laag):
+    if re.search(r"\b(files?|verkeersinfo|verkeersinformatie|ongeluk|afsluiting|wegwerkzaamheden|verkeer)\b|wat staat er op de [an]\d{1,3}\b", laag):
         return [("verkeer", tekst)]
     if re.search(r"\b(recept|recepten|wat kan ik maken|koken met|te eten maken)\b", laag):
         return [("recepten", tekst)]
