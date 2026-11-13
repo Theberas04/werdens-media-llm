@@ -90,6 +90,12 @@ fi
 
 log "5/7 Engine, configuratie en dienst plaatsen"
 pct push "$CTID" "$APP_DIR/engine/wllm.py" "$TARGET/wllm.py" --perms 0755
+# De catalogus van drieduizend gereedschappen hoort naast de engine te staan;
+# zonder dit bestand start de engine wel, maar kent hij geen enkele catalogusnaam.
+if [ -f "$APP_DIR/engine/catalogus.json" ]; then
+  pct push "$CTID" "$APP_DIR/engine/catalogus.json" "$TARGET/catalogus.json" --perms 0644
+  log "    catalogus meegezonden ($(wc -c < "$APP_DIR/engine/catalogus.json") bytes)"
+fi
 
 cat > /tmp/wmlm-config.env <<EOF
 WLLM_HOME=$TARGET
