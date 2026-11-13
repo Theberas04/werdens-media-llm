@@ -20392,6 +20392,14 @@ class Handler(BaseHTTPRequestHandler):
             if soort in CATALOGUS:
                 return self._json(gereedschap_catalogus(
                     soort + " " + (self._vraag("q") or self._vraag("plaats") or "")))
+            if soort not in GEREEDSCHAP_ROUTES and CATALOGUS:
+                # ook zonder accenten en in kleine letters: 'lange weekenden belgie'
+                kaal = _zonder_accent(soort)
+                for naam in CATALOGUS_NAMEN:
+                    if _zonder_accent(naam) == kaal:
+                        return self._json(gereedschap_catalogus(
+                            naam + " " + (self._vraag("q") or self._vraag("plaats") or "")))
+                        break
             invoer = GEREEDSCHAP_ROUTES.get(soort)
             if invoer:
                 functie, veld = invoer
