@@ -101,7 +101,7 @@ is of hoe laat het is. De engine haalt dat zelf op en zet het boven de vraag, du
 het model hoeft niets te beslissen — dat is precies waarom het ook met een klein
 model werkt.
 
-Er zijn driehonderdvijfenzeventig gereedschappen, in tweeëndertig groepen.
+Er zijn driehonderdvijfenzeventig gereedschappen, in tweeëndertig groepen. Daarnaast staat er een **catalogus van drieduizend** gereedschappen naast, die je op naam aanroept.
 
 **Zonder internet** — de engine rekent zelf, dus altijd goed en direct:
 
@@ -283,6 +283,30 @@ Er zijn driehonderdvijfenzeventig gereedschappen, in tweeëndertig groepen.
 | Belasting en toeslagen | 8 | aangifte, aftrekposten, heffingskortingen, bijzondere tarieven, btw-aangifte, zzp-kosten, schenkbelasting, erfbelasting |
 | Vrije tijd en hobby | 10 | hondenrassen, kattenrassen, spreuk van de dag, vogelherkenning, visstekken, fietstocht, wandelroutes, speeltuin, naambetekenis, woordspel |
 | Diversen | 6 | was buiten, barbecueweer, feestdagen wereldwijd, naam van de dag, weer vorig jaar, eenheden voor druk en energie |
+
+**De catalogus van drieduizend:**
+
+Naast de gereedschappen hierboven zit er een catalogus in de engine: drieduizend
+gereedschappen die elk op hun eigen naam te gebruiken zijn. Ze vallen in zeven families,
+en elke familie heeft één functie in de engine — daarom zijn het er drieduizend zonder dat
+de code drieduizend functies heeft.
+
+| Familie | Aantal | Wat je ermee doet |
+|---|---|---|
+| CBS-cijfers | 1950 | *cbs 83625ned* — de cijfers van elke tabel van het CBS, met titel, periode en de eerste regels |
+| Feestdagen per land | 204 | *feestdagen duitsland* — de feestdagen van dat land in het komende jaar |
+| Lange weekenden per land | 204 | *lange weekenden duitsland* — welke feestdagen gunstig vallen voor een lang weekend |
+| Kaart en omgeving | 199 | *dichtstbijzijnde brievenbus in Utrecht* — waar iets in de buurt is |
+| Eigen reken- en taalgereedschap | 193 | *oppervlakte uitrekenen*, *kiloprijs vergelijken* — rekent de engine zelf |
+| Wikipedia-onderwerpen | 177 | *treinstation: spoorwegstations in nederland* — naslag per onderwerp |
+| Nieuwsbronnen | 73 | *nos.nl algemeen nieuws* — het laatste nieuws van die bron |
+
+Elk van die drieduizend is ook een eigen route: `/api/cbs%2083625ned`,
+`/api/feestdagen%20duitsland`. Zoeken in de catalogus gaat met
+`/api/catalogus?zoek=koopwoningen` (met `&familie=cbs` en `&limiet=50` als je wilt
+beperken), en het aantal staat in `/api/gereedschap`. Vraag je het in gewone taal, dan
+pakt de engine de catalogus pas als geen enkel ander gereedschap de vraag herkent — de
+gewone gereedschappen blijven dus voorgaan.
 
 **Je eigen apps:**
 

@@ -49,6 +49,7 @@ import sys
 import threading
 import time
 import urllib.error
+import unicodedata
 import urllib.parse
 import urllib.request
 import zipfile
@@ -17881,6 +17882,311 @@ def gereedschap_woordspel(argument: str = "") -> dict:
             "tekst": tekst}
 
 
+# ---- U. de catalogus: drieduizend gereedschappen op naam
+
+CATALOGUS: dict[str, dict] = {}
+CATALOGUS_NAMEN: list[str] = []
+
+
+def catalogus_laad() -> int:
+    """De catalogus inlezen. Staat naast dit bestand of in de projectmap."""
+    global CATALOGUS, CATALOGUS_NAMEN
+    hier = os.path.dirname(os.path.abspath(__file__))
+    for pad in (os.path.join(hier, "catalogus.json"),
+                os.path.join(hier, "..", "engine", "catalogus.json"),
+                os.path.join("engine", "catalogus.json")):
+        try:
+            with open(pad, encoding="utf-8") as bestand:
+                rijen = json.load(bestand)
+        except Exception:
+            continue
+        CATALOGUS = {str(rij["naam"]): rij for rij in rijen if rij.get("naam")}
+        CATALOGUS_NAMEN = sorted(CATALOGUS, key=len, reverse=True)
+        return len(CATALOGUS)
+    CATALOGUS = {}
+    CATALOGUS_NAMEN = []
+    return 0
+
+
+def catalogus_zoek(zoek: str = "", familie: str = "", limiet: int = 40) -> list[dict]:
+    """Zoeken in de catalogus op naam, groep of familie."""
+    laag = (zoek or "").lower().strip()
+    uit = []
+    for naam, rij in CATALOGUS.items():
+        if familie and rij.get("familie") != familie:
+            continue
+        if laag and laag not in naam and laag not in str(rij.get("wat", "")).lower():
+            continue
+        uit.append(rij)
+        if len(uit) >= limiet:
+            break
+    return uit
+
+
+def _cat_kolom(naam: str) -> str:
+    """Een CBS-kolomnaam leesbaar maken: GemiddeldeVerkoopprijs_1 -> gemiddelde verkoopprijs."""
+    schoon = re.sub(r"_\d+$", "", str(naam)).replace("_", " ")
+    return schoon[:1].lower() + schoon[1:]
+
+
+def _cat_cbs(tabel: str, naam: str) -> dict:
+    """Een tabel van het CBS openen: titel, periode en de eerste cijfers."""
+    tabel = tabel.upper()
+    bron = f"opendata.cbs.nl/ODataApi/odata/{tabel}"
+    try:
+        info = _haal_json(f"https://opendata.cbs.nl/ODataApi/odata/{tabel}/TableInfos?$top=1", limiet=25)
+        rijen = _haal_json(f"https://opendata.cbs.nl/ODataApi/odata/{tabel}/TypedDataSet?$top=12", limiet=30)
+    except Exception as fout:
+        return {"naam": naam, "bron": bron, "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    kop = ((info or {}).get("value") or [{}])[0]
+    titel = _schoon(str(kop.get("Title") or kop.get("ShortTitle") or tabel))
+    periode = _schoon(str(kop.get("Period") or ""))
+    omschrijving = _schoon(str(kop.get("ShortDescription") or ""))
+    waarden = (rijen or {}).get("value") or []
+    if not waarden:
+        return {"naam": naam, "bron": bron, "tekst": "",
+                "fout": f"de tabel {tabel} bestaat wel, maar er kwamen geen cijfers terug"}
+    regels = []
+    for rij in waarden[:6]:
+        stukken = []
+        for sleutel, waarde in rij.items():
+            if sleutel in ("ID", "Measure", "Value", "StringValue") or waarde in (None, ""):
+                continue
+            stukken.append(f"{_cat_kolom(sleutel)}: {waarde}")
+        if stukken:
+            regels.append("; ".join(stukken))
+    tekst = f"CBS-tabel {tabel}: {titel}."
+    if omschrijving and omschrijving != titel:
+        tekst += f" {omschrijving}"
+    if periode:
+        tekst += f" Periode: {periode}."
+    tekst += " De eerste regels: " + " | ".join(regels)
+    tekst += (f" De hele tabel staat op "
+              f"https://opendata.cbs.nl/statline/#/CBS/nl/dataset/{tabel}/table")
+    return {"naam": naam, "bron": bron, "tekst": tekst}
+
+
+def _cat_feestdagen(code: str, naam: str, argument: str = "") -> dict:
+    """De feestdagen van een land (Nager.Date)."""
+    jaar = re.search(r"\b(20\d\d)\b", argument or "")
+    jaar = jaar.group(1) if jaar else str(datetime.date.today().year + 1)
+    adres = f"https://date.nager.at/api/v3/PublicHolidays/{jaar}/{code}"
+    try:
+        rijen = _haal_json(adres, limiet=20)
+    except Exception as fout:
+        return {"naam": naam, "bron": "date.nager.at", "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    if not isinstance(rijen, list) or not rijen:
+        return {"naam": naam, "bron": "date.nager.at", "tekst": "",
+                "fout": f"geen feestdagen gevonden voor {code} in {jaar}"}
+    land = naam.split(" ", 1)[-1].strip().title() or code
+    regels = []
+    for rij in rijen:
+        soort = "landelijk" if rij.get("global") else "regionaal"
+        regels.append(f"{rij.get('date')} {_schoon(str(rij.get('localName') or rij.get('name') or ''))} ({soort})")
+    return {"naam": naam, "bron": f"date.nager.at ({code})",
+            "tekst": f"Feestdagen in {land} in {jaar} ({len(rijen)} stuks): " + "; ".join(regels)}
+
+
+def _cat_lange_weekenden(code: str, naam: str) -> dict:
+    """Welke feestdagen gunstig vallen: een vrije vrijdag of maandag."""
+    adres = f"https://date.nager.at/api/v3/NextPublicHolidays/{code}"
+    try:
+        rijen = _haal_json(adres, limiet=20)
+    except Exception as fout:
+        return {"naam": naam, "bron": "date.nager.at", "tekst": "", "fout": f"{type(fout).__name__}: {fout}"}
+    if not isinstance(rijen, list) or not rijen:
+        return {"naam": naam, "bron": "date.nager.at", "tekst": "",
+                "fout": f"geen komende feestdagen gevonden voor {code}"}
+    land = naam.split(" ", 2)[-1].strip().title() or code
+    mooi, rest = [], []
+    for rij in rijen[:12]:
+        datum = str(rij.get("date") or "")
+        naamdag = _schoon(str(rij.get("localName") or rij.get("name") or ""))
+        try:
+            dag = datetime.date.fromisoformat(datum)
+        except ValueError:
+            continue
+        if dag.weekday() in (0, 4):
+            mooi.append(f"{datum} {naamdag} valt op een {'maandag' if dag.weekday() == 0 else 'vrijdag'}")
+        else:
+            rest.append(f"{datum} {naamdag}")
+    tekst = f"Komende feestdagen in {land}, met het oog op een lang weekend. "
+    if mooi:
+        tekst += "Gunstig: " + "; ".join(mooi) + ". "
+    else:
+        tekst += "Geen van de komende feestdagen valt op een vrijdag of maandag. "
+    if rest:
+        tekst += "De overige: " + "; ".join(rest[:6]) + ". "
+    tekst += ("Let op: in Nederland schuift een feestdag die op zaterdag of zondag valt niet door; "
+              "in het Verenigd Koninkrijk en Ierland wel.")
+    return {"naam": naam, "bron": f"date.nager.at ({code})", "tekst": tekst}
+
+
+def _cat_kaart(tag: str, naam: str, argument: str = "") -> dict:
+    """De dichtstbijzijnde plek met dit kenmerk op de kaart."""
+    if "=" not in tag:
+        return {"naam": naam, "bron": "openstreetmap.org", "tekst": "",
+                "fout": "dit kaartgereedschap heeft geen kenmerk"}
+    sleutel, waarde = tag.split("=", 1)
+    plaats = _plaats_uit(argument) or (argument or "").strip() or GEREEDSCHAP_PLAATS
+    if not plaats:
+        return {"naam": naam, "bron": "openstreetmap.org", "tekst": "",
+                "fout": "noem een plaats, bijvoorbeeld 'in Utrecht'"}
+    try:
+        breedte, lengte, nette = _coordinaten(plaats)
+    except Exception as fout:
+        return {"naam": naam, "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    vraag = (f'[out:json][timeout:20];nwr["{sleutel}"="{waarde}"]'
+             f'(around:3000,{breedte},{lengte});out center 12;')
+    try:
+        gegevens = _overpass(vraag)
+    except Exception as fout:
+        return {"naam": naam, "bron": "openstreetmap.org", "tekst": "", "fout": str(fout)}
+    elementen = gegevens.get("elements") or []
+    if not elementen:
+        return {"naam": naam, "bron": "openstreetmap.org", "tekst": "",
+                "fout": (f"in OpenStreetMap staat geen {naam} binnen drie kilometer van {nette}. "
+                         "Niet elke plek is ingetekend; probeer een grotere plaats of een andere naam.")}
+    gevonden = []
+    for element in elementen:
+        punt = element.get("center") or {}
+        lat = punt.get("lat") or element.get("lat")
+        lon = punt.get("lon") or element.get("lon")
+        if lat is None or lon is None:
+            continue
+        afstand = _afstand_km(breedte, lengte, float(lat), float(lon))
+        kenmerken = element.get("tags") or {}
+        label = (kenmerken.get("name") or kenmerken.get("operator")
+                 or kenmerken.get("brand") or waarde.replace("_", " "))
+        extra = []
+        if kenmerken.get("addr:street"):
+            extra.append(str(kenmerken["addr:street"]))
+        if kenmerken.get("opening_hours"):
+            extra.append(f"open {kenmerken['opening_hours']}")
+        if kenmerken.get("phone"):
+            extra.append(str(kenmerken["phone"]))
+        gevonden.append((afstand, label, extra))
+    if not gevonden:
+        return {"naam": naam, "bron": "openstreetmap.org", "tekst": "",
+                "fout": "de kaart gaf plekken terug zonder plaatsbepaling"}
+    gevonden.sort(key=lambda rij: rij[0])
+    regels = []
+    for afstand, label, extra in gevonden[:5]:
+        stuk = f"{label} ({_getal(afstand, ' km')})"
+        if extra:
+            stuk += " — " + ", ".join(extra)
+        regels.append(stuk)
+    return {"naam": naam, "bron": "openstreetmap.org",
+            "tekst": f"{naam.capitalize()} bij {nette}: " + "; ".join(regels) + "."}
+
+
+def _afstand_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Hemelsbrede afstand in kilometers (haversine)."""
+    import math as _wiskunde
+    straal = 6371.0
+    d_lat = _wiskunde.radians(lat2 - lat1)
+    d_lon = _wiskunde.radians(lon2 - lon1)
+    a = (_wiskunde.sin(d_lat / 2) ** 2
+         + _wiskunde.cos(_wiskunde.radians(lat1)) * _wiskunde.cos(_wiskunde.radians(lat2))
+         * _wiskunde.sin(d_lon / 2) ** 2)
+    return straal * 2 * _wiskunde.asin(min(1.0, _wiskunde.sqrt(a)))
+
+
+def _cat_naslag(onderwerp: str, naam: str) -> dict:
+    """Naslag over een onderwerp (Nederlandse Wikipedia)."""
+    gegevens = _wiki_samenvatting(onderwerp)
+    if not gegevens:
+        return {"naam": naam, "bron": "nl.wikipedia.org", "tekst": "",
+                "fout": f"ik kon '{onderwerp}' niet vinden op de Nederlandse Wikipedia"}
+    titel = _schoon(str(gegevens.get("title") or onderwerp))
+    extract = _schoon(str(gegevens.get("extract") or ""))
+    if not extract:
+        return {"naam": naam, "bron": "nl.wikipedia.org", "tekst": "",
+                "fout": f"de pagina '{titel}' heeft geen samenvatting"}
+    return {"naam": naam, "bron": f"nl.wikipedia.org/wiki/{urllib.parse.quote(titel.replace(' ', '_'))}",
+            "tekst": f"{titel}: {_kort(extract, 900)}"}
+
+
+def _cat_nieuws(adres: str, naam: str) -> dict:
+    """Het laatste nieuws van deze bron."""
+    uitkomst = gereedschap_feed(adres)
+    uitkomst["naam"] = naam
+    return uitkomst
+
+
+def _cat_eigen(doel: str, naam: str, argument: str = "") -> dict:
+    """Een reken- of taalgereedschap van de engine, onder zijn catalogusnaam."""
+    if doel not in GEREEDSCHAP_SOORTEN:
+        return {"naam": naam, "bron": "eigen code", "tekst": "",
+                "fout": f"het gereedschap '{doel}' bestaat niet in deze engine"}
+    uitkomsten = gereedschap_uitvoeren([(doel, argument)])
+    if not uitkomsten:
+        return {"naam": naam, "bron": "eigen code", "tekst": "",
+                "fout": f"'{doel}' gaf geen antwoord op deze vraag"}
+    eerste = dict(uitkomsten[0])
+    eerste["naam"] = naam
+    eerste["bron"] = f"{eerste.get('bron', 'eigen code')} (via {doel})"
+    return eerste
+
+
+def gereedschap_catalogus(argument: str = "") -> dict:
+    """Een gereedschap uit de catalogus van drieduizend, op zijn naam."""
+    tekst = (argument or "").strip()
+    if not tekst:
+        return {"naam": "catalogus", "bron": "engine", "tekst": "",
+                "fout": "noem een gereedschap uit de catalogus, bijvoorbeeld 'cbs 85643ned' of "
+                        "'feestdagen duitsland'"}
+    laag = _zonder_accent(tekst)
+    regel = None
+    for naam in CATALOGUS_NAMEN:
+        if laag.startswith(_zonder_accent(naam)):
+            regel = CATALOGUS[naam]
+            break
+    if regel is None:
+        for naam in CATALOGUS_NAMEN:
+            if _zonder_accent(naam) in laag:
+                regel = CATALOGUS[naam]
+                break
+    if regel is None:
+        return {"naam": "catalogus", "bron": "engine", "tekst": "",
+                "fout": (f"'{tekst[:60]}' staat niet in de catalogus van drieduizend. "
+                         f"Zoek een gereedschap met /api/catalogus?zoek=... of kijk in de lijst; "
+                         f"er zijn {len(CATALOGUS)} namen, zoals 'cbs 83625ned', "
+                         f"'feestdagen duitsland' of 'nos.nl algemeen nieuws'.")}
+    naam = regel["naam"]
+    familie = regel.get("familie")
+    parameter = str(regel.get("parameter") or "")
+    try:
+        if familie == "cbs":
+            return _cat_cbs(parameter, naam)
+        if familie == "feestdagen":
+            return _cat_feestdagen(parameter, naam, tekst)
+        if familie == "lange weekenden":
+            return _cat_lange_weekenden(parameter, naam)
+        if familie == "kaart":
+            return _cat_kaart(parameter, naam, tekst)
+        if familie == "naslag":
+            return _cat_naslag(parameter, naam)
+        if familie == "nieuws":
+            return _cat_nieuws(parameter, naam)
+        if familie == "eigen":
+            return _cat_eigen(parameter, naam, tekst)
+    except Exception as fout:
+        return {"naam": naam, "bron": str(regel.get("bron") or ""), "tekst": "",
+                "fout": f"{type(fout).__name__}: {fout}"}
+    return {"naam": naam, "bron": str(regel.get("bron") or ""), "tekst": "",
+            "fout": f"de familie '{familie}' van dit gereedschap is niet bekend"}
+
+
+CATALOGUS_AANTAL = catalogus_laad()
+
+
+def _zonder_accent(tekst: str) -> str:
+    """Tekst zonder accenten, zodat 'belgie' ook 'België' vindt."""
+    kaal = unicodedata.normalize("NFKD", tekst or "")
+    return "".join(teken for teken in kaal if not unicodedata.combining(teken)).lower()
+
+
 # Welke route bij welk gereedschap hoort: (/api/<naam>?q=...)
 GEREEDSCHAP_ROUTES = {
     "rekenen": (gereedschap_rekenen, "q"),
@@ -19233,6 +19539,16 @@ def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
     if re.search(r"(?:serverstatus|schijfruimte|vrije ruimte op de schijf|servertemperatuur|hoe warm is de server|hoe staat de server ervoor)", laag):
         return [("serverstatus", "")]
 
+    # de catalogus van drieduizend: een tabelnummer, of een land dat erin staat
+    if re.search(r"\bcbs\s+[a-z]\d{4}[a-z]{2}\b|\bcbs\s+\d{5}[a-z]{2}\b|\bcbs-tabel\b", laag):
+        return [("catalogus", tekst)]
+    if re.search(r"\bfeestdagen\b|\blange weekenden\b|\bvrije dagen\b", laag):
+        for naam in CATALOGUS_NAMEN:
+            if not naam.startswith(("feestdagen ", "lange weekenden ")):
+                continue
+            land = _zonder_accent(naam.split(" ", 2)[-1])
+            if len(land) > 3 and land in _zonder_accent(laag):
+                return [("catalogus", naam + " " + tekst)]
     # de specifieke gereedschappen eerst, dan de algemene hieronder
     if re.fullmatch(r"[\d\s.,+\-*/x^()]+", laag) or re.search(
         r"^\s*(reken|bereken)\b|\bhoeveel is\b|\bwat is de uitkomst\b|\btel (eens )?op\b|\bdeel door\b", laag
@@ -19547,6 +19863,13 @@ def gereedschap_kies(tekst: str) -> list[tuple[str, str]]:
             keuzes.append(("naslag", onderwerp))
         elif re.search(r"\b(zoek|zoek op|zoek eens|opzoeken|op te zoeken|search|google)\b", laag):
             keuzes.append(("zoeken", tekst))
+    if not keuzes:
+        # de catalogus van drieduizend is het laatste redmiddel: alles wat de
+        # gereedschappen hierboven niet kennen, kan hier nog bij uitkomen
+        for naam in CATALOGUS_NAMEN:
+            if naam in laag:
+                keuzes.append((naam, tekst))
+                break
     return keuzes[:3]
 
 
@@ -19679,6 +20002,10 @@ def gereedschap_uitvoeren(keuzes: list[tuple[str, str]]) -> list[dict]:
                 uitkomsten.append(gereedschap_reistijd(argument))
             elif soort == "spelling":
                 uitkomsten.append(gereedschap_spelling(argument))
+            elif soort == "catalogus":
+                uitkomsten.append(gereedschap_catalogus(argument))
+            elif soort in CATALOGUS:
+                uitkomsten.append(gereedschap_catalogus(soort + " " + argument))
             elif soort in GEREEDSCHAP_ROUTES:
                 functie, veld = GEREEDSCHAP_ROUTES[soort]
                 uitkomsten.append(functie(argument) if veld else functie())
@@ -20021,12 +20348,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"models": STORE.list_models()})
         if path == "/api/herstel":
             return self._herstel()
+        if path == "/api/catalogus":
+            return self._json({
+                "aantal": len(CATALOGUS),
+                "families": sorted({str(r.get("familie")) for r in CATALOGUS.values()}),
+                "zoek": self._vraag("zoek") or "",
+                "familie": self._vraag("familie") or "",
+                "gereedschappen": catalogus_zoek(
+                    self._vraag("zoek") or "", self._vraag("familie") or "",
+                    int(self._vraag("limiet") or 40)),
+            })
         if path == "/api/gereedschap":
             return self._json(
                 {
                     "aan": GEREEDSCHAP,
                     "soorten": GEREEDSCHAP_SOORTEN,
                     "standaard_plaats": GEREEDSCHAP_PLAATS,
+                    "catalogus": len(CATALOGUS),
                     "tijd": gereedschap_tijd()["tekst"],
                 }
             )
@@ -20042,6 +20380,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(gereedschap_tijd())
         if path.startswith("/api/"):
             soort = urllib.parse.unquote(path[len("/api/") :].strip("/"))
+            if soort in CATALOGUS:
+                return self._json(gereedschap_catalogus(
+                    soort + " " + (self._vraag("q") or self._vraag("plaats") or "")))
             invoer = GEREEDSCHAP_ROUTES.get(soort)
             if invoer:
                 functie, veld = invoer
