@@ -101,7 +101,7 @@ is of hoe laat het is. De engine haalt dat zelf op en zet het boven de vraag, du
 het model hoeft niets te beslissen — dat is precies waarom het ook met een klein
 model werkt.
 
-Er zijn tweehonderdzevenenzeventig gereedschappen, in eenentwintig groepen.
+Er zijn driehonderdvijfenzeventig gereedschappen, in tweeëndertig groepen.
 
 **Zonder internet** — de engine rekent zelf, dus altijd goed en direct:
 
@@ -267,6 +267,22 @@ Er zijn tweehonderdzevenenzeventig gereedschappen, in eenentwintig groepen.
 | Gezondheid en voeding | 11 | BMI en gezond gewicht, hartslagzones, stappen naar kilometers, E-nummers, AED in de buurt, apotheken, huisartsenpost, tekenbeet en lyme, reisvaccinaties, bloeddonatie, psychische hulp |
 | Buurt en wonen | 13 | openingstijden winkel, scholen, kinderopvang, speeltuinen, honden uitlaatplekken, geldautomaat, brievenbus, glasbak, bibliotheek en zwembad, bestemmingsplan, leefbaarheid, energielabel, bouwprojecten |
 | Techniek en internet | 20 | IP opzoeken, DNS, SSL-certificaat, GitHub, npm, PyPI, Docker, CVE zoeken, wachtwoordlek, wayback machine, QR-code, link inkorten, Linux-commando, cron, schermafdruk, UUID en wachtwoord, JSON formatteren, unixtijd, bestandsgrootte, serverstatus |
+
+**Er nog eens 98 bij, in elf nieuwe groepen:**
+
+| Groep | Aantal | Wat erin zit |
+|---|---|---|
+| Huishouden en klussen | 10 | verf, behang, tegels, beton en zand, schutting, wasgoed, vlekken, schoonmaakmiddelen, apparaatverbruik, huisonderhoud |
+| Tuin en planten | 8 | zaaikalender, bodemtemperatuur, vorst op komst, gietadvies, zon in de tuin, plant opzoeken, boom herkennen, onkruid herkennen |
+| Eten en koken | 10 | recept zoeken, recept met ingrediënt, willekeurig recept, cocktail, bier, wijn bij gerecht, ovenstanden, houdbaarheid, boodschappenlijst, menugrootte |
+| Reizen en vakantie | 12 | adres opzoeken, weer op de bestemming, zonsondergang op reis, tijdverschil, munten omrekenen, rijtijd, tolwegen, tankstations langs de route, overnachting, kampeerplekken, bagageregels, reisverzekering |
+| Wetenschap en ruimte | 10 | wetenschappelijke artikelen, artikel met DOI, arXiv, ruimtevaartnieuws, raketlanceringen, aardbevingen wereldwijd, planeten vannacht, sterrenhemel, aardmagnetisch veld, elementen |
+| Kinderen en school | 8 | tafels, breuken, dictee, werkwoordspelling, kinderuitleg, kinderliedjes, spreekbeurt, geschiedenis voor kinderen |
+| Auto en onderhoud | 8 | onderhoudsschema, bandenspanning, laadkosten, autokosten, wegenbelasting, schadeformulier, kentekencheck RDW, oldtimer-vrijstelling |
+| Verzekering en pensioen | 8 | zorgverzekering, zorgkosten, inboedel, opstal, aansprakelijkheid, pensioenopbouw, pensioengat, lijfrente |
+| Belasting en toeslagen | 8 | aangifte, aftrekposten, heffingskortingen, bijzondere tarieven, btw-aangifte, zzp-kosten, schenkbelasting, erfbelasting |
+| Vrije tijd en hobby | 10 | hondenrassen, kattenrassen, spreuk van de dag, vogelherkenning, visstekken, fietstocht, wandelroutes, speeltuin, naambetekenis, woordspel |
+| Diversen | 6 | was buiten, barbecueweer, feestdagen wereldwijd, naam van de dag, weer vorig jaar, eenheden voor druk en energie |
 
 **Je eigen apps:**
 
